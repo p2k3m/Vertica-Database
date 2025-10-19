@@ -9,14 +9,17 @@ import vertica_python
 from .wait_for_port import UNREACHABLE_ERRNOS, wait_for_port
 
 
-def _get_env_value(*keys: str, default: Optional[str] = None) -> str:
+_DEFAULT_SENTINEL = object()
+
+
+def _get_env_value(*keys: str, default: Optional[str] = _DEFAULT_SENTINEL) -> Optional[str]:
     """Return the first non-empty environment variable among ``keys``."""
 
     for key in keys:
         value = os.getenv(key)
         if value:
             return value
-    if default is not None:
+    if default is not _DEFAULT_SENTINEL:
         return default
     raise KeyError(f"None of the environment variables {keys!r} are set")
 
@@ -83,7 +86,11 @@ CONFIG = {
 
 def test_can_connect_and_query():
     try:
-        wait_for_port(HOST, PORT)
+        wait_for_port(HOST, PORT, timeout=10)
+    except TimeoutError:
+        pytest.skip(
+            "Timed out waiting for Vertica service to accept connections; likely not running in the sandbox"
+        )
     except OSError as exc:
         if exc.errno in UNREACHABLE_ERRNOS:
             pytest.skip(
