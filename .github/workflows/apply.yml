@@ -100,7 +100,7 @@ jobs:
           fi
 
           echo "Waiting for instance $INSTANCE_ID to register with AWS Systems Manager..."
-          if ! aws ssm wait instance-online --instance-ids "$INSTANCE_ID"; then
+          if ! aws ssm wait instance-registered --instance-ids "$INSTANCE_ID"; then
             echo "Instance failed to register with SSM. Current inventory entry (if any):"
             aws ssm describe-instance-information --query "InstanceInformationList[?InstanceId=='$INSTANCE_ID']" || true
             exit 1
