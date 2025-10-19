@@ -4,7 +4,7 @@ exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 
 # Install Docker and helpers
 amazon-linux-extras enable docker || true
-yum install -y amazon-ssm-agent docker jq nmap-ncat
+yum install -y amazon-ssm-agent docker jq nmap-ncat python3 python3-pip
 systemctl enable --now docker
 systemctl enable --now amazon-ssm-agent
 
