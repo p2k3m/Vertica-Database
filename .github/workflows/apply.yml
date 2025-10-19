@@ -92,6 +92,20 @@ jobs:
           INSTANCE_ID: "${{ steps.out.outputs.instance_id }}"
         run: |
           set -euo pipefail
+          echo "Waiting for instance $INSTANCE_ID to pass EC2 status checks..."
+          if ! aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"; then
+            echo "Instance did not reach status-ok. Current status:"
+            aws ec2 describe-instance-status --instance-ids "$INSTANCE_ID" --include-all-instances || true
+            exit 1
+          fi
+
+          echo "Waiting for instance $INSTANCE_ID to register with AWS Systems Manager..."
+          if ! aws ssm wait instance-online --instance-ids "$INSTANCE_ID"; then
+            echo "Instance failed to register with SSM. Current inventory entry (if any):"
+            aws ssm describe-instance-information --query "InstanceInformationList[?InstanceId=='$INSTANCE_ID']" || true
+            exit 1
+          fi
+
           cat >ssm-commands.json <<'JSON'
           {
             "commands": [
