@@ -35,7 +35,7 @@ Set these repository secrets before running the workflows:
 Optional repository variables:
 
 - `ALLOWED_CIDR` – lock down Vertica ingress (defaults to `0.0.0.0/0`)
-- `VERTICA_IMAGE` – override the Vertica CE image (`957650740525.dkr.ecr.ap-south-1.amazonaws.com/vertica-ce:v1.0` by default)
+- `VERTICA_IMAGE` – override the Vertica CE image (`vertica/vertica-ce:24.2.0-0` by default)
 
 ## Remote state bootstrap
 

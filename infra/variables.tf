@@ -24,5 +24,5 @@ variable "use_spot" {
 
 variable "vertica_image" {
   type    = string
-  default = "957650740525.dkr.ecr.ap-south-1.amazonaws.com/vertica-ce:v1.0"
+  default = "vertica/vertica-ce:24.2.0-0"
 }
