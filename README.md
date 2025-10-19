@@ -69,6 +69,23 @@ Terraform outputs (`public_ip` first, then `public_dns`) from the `infra/` direc
 `VERTICA_HOST` manually. Environment variables `DB_HOST`/`VERTICA_HOST` and `DB_PORT`/`VERTICA_PORT` still override the
 defaults when provided.
 
+For a quick manual check without installing pytest, run the bundled smoke-test script:
+
+```bash
+python scripts/vertica_smoke.py --timeout 15
+```
+
+The helper prints the host and port it targets before attempting to connect. In sandboxes that block outbound
+connections, the script exits successfully after emitting a warning such as:
+
+```
+Target Vertica endpoint: 203.0.113.10:5433
+Network unreachable when connecting to Vertica host at 203.0.113.10:5433. This sandbox likely blocks outbound traffic.
+```
+
+Passing `--require-service` forces a non-zero exit code instead, which is useful when you expect the network path to be
+open and want the script to fail loudly.
+
 ### Troubleshooting connectivity from CI sandboxes
 
 Some ephemeral CI environments (including the one used for the provided integration tests) block outbound traffic to

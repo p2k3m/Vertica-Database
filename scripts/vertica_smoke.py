@@ -72,16 +72,16 @@ def _wait_for_service(host: str, port: int, timeout: float, require_service: boo
                 "Timed out waiting for Vertica service to accept connections."
             )
         print(
-            "Vertica service did not become reachable before the timeout; "
-            "skipping connectivity checks.",
+            f"Vertica service at {host}:{port} did not become reachable before the "
+            "timeout; skipping connectivity checks.",
             file=sys.stderr,
         )
         return False
     except OSError as exc:
         if exc.errno in UNREACHABLE_ERRNOS and not require_service:
             print(
-                "Network unreachable when connecting to Vertica host. "
-                "This sandbox likely blocks outbound traffic.",
+                "Network unreachable when connecting to Vertica host at "
+                f"{host}:{port}. This sandbox likely blocks outbound traffic.",
                 file=sys.stderr,
             )
             return False
@@ -107,6 +107,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     host = _resolve_host()
     port = _resolve_port()
+
+    print(f"Target Vertica endpoint: {host}:{port}")
 
     if not _wait_for_service(host, port, timeout=args.timeout, require_service=args.require_service):
         return 0
