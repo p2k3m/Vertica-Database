@@ -122,7 +122,7 @@ jobs:
           {
             "commands": [
               "python3 -m pip install --quiet vertica-python",
-              "python3 -c 'import vertica_python; conn=vertica_python.connect(host=\"127.0.0.1\", port=5433, user=\"dbadmin\", password=\"\", database=\"VMart\"); cur=conn.cursor(); cur.execute(\"SELECT 1\"); print(cur.fetchone()[0])'"
+              "python3 <<'PY'\nimport socket\nimport time\nimport vertica_python\n\nHOST = '127.0.0.1'\nPORT = 5433\nDEADLINE = time.time() + 600\nwhile time.time() < DEADLINE:\n    with socket.socket() as sock:\n        sock.settimeout(5)\n        try:\n            sock.connect((HOST, PORT))\n        except OSError:\n            time.sleep(5)\n        else:\n            break\nelse:\n    raise SystemExit('Vertica port never became reachable')\n\nfor attempt in range(12):\n    try:\n        with vertica_python.connect(host=HOST, port=PORT, user='dbadmin', password='', database='VMart') as conn:\n            cur = conn.cursor()\n            cur.execute('SELECT 1')\n            value = cur.fetchone()\n            if not value:\n                raise SystemExit('Empty response from SELECT 1')\n            print(value[0])\n            break\n    except Exception:\n        if attempt == 11:\n            raise\n        time.sleep(5)\nPY"
             ]
           }
           JSON
