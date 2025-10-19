@@ -55,8 +55,23 @@ command -v docker compose >/dev/null 2>&1 || \
 
 (docker compose -f /opt/compose.remote.yml up -d) || (docker-compose -f /opt/compose.remote.yml up -d)
 
-# Wait for port
-for i in {1..60}; do
-  nc -z 127.0.0.1 5433 && exit 0 || sleep 5
+# Wait for Vertica container health/port
+deadline=$((SECONDS + 1800))
+while [ $SECONDS -lt $deadline ]; do
+  if docker inspect vertica_ce >/dev/null 2>&1; then
+    status=$(docker inspect --format '{{.State.Health.Status}}' vertica_ce 2>/dev/null || echo "unknown")
+    case "$status" in
+      healthy)
+        nc -z 127.0.0.1 5433 && exit 0
+        ;;
+      unhealthy)
+        docker logs vertica_ce || true
+        exit 1
+        ;;
+    esac
+  fi
+  sleep 5
 done
+
+docker logs vertica_ce || true
 exit 1
