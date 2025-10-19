@@ -19,13 +19,13 @@ fi
 
 # ECR login (best effort)
 aws ecr get-login-password --region "$REGION" \
-  | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com || true
+  | docker login --username AWS --password-stdin $${ACCOUNT_ID}.dkr.ecr.$${REGION}.amazonaws.com || true
 
 # Render compose (Vertica only)
 cat >/opt/compose.remote.yml <<'YAML'
 services:
   vertica:
-    image: ${VERTICA_IMAGE}
+    image: $${VERTICA_IMAGE}
     container_name: vertica_ce
     restart: always
     ports: ["5433:5433"]
