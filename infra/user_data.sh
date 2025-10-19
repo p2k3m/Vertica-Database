@@ -18,9 +18,19 @@ if [[ -z "$ACCOUNT_ID" || "$ACCOUNT_ID" == "null" ]]; then
   ACCOUNT_ID="${aws_account_id}"
 fi
 
-# ECR login (best effort)
-aws ecr get-login-password --region "$REGION" \
-  | docker login --username AWS --password-stdin $${ACCOUNT_ID}.dkr.ecr.$${REGION}.amazonaws.com || true
+# Determine Vertica image for later reuse
+VERTICA_IMAGE="${vertica_image}"
+
+# ECR (or ECR Public) login if the image requires it (best effort)
+if [[ "$VERTICA_IMAGE" =~ ^([0-9]+\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com)(/.+)$ ]]; then
+  ECR_HOST="${BASH_REMATCH[1]}"
+  ECR_REGION="${BASH_REMATCH[2]}"
+  aws ecr get-login-password --region "$ECR_REGION" \
+    | docker login --username AWS --password-stdin "$ECR_HOST" || true
+elif [[ "$VERTICA_IMAGE" =~ ^public\.ecr\.aws/ ]]; then
+  aws ecr-public get-login-password --region us-east-1 \
+    | docker login --username AWS --password-stdin public.ecr.aws || true
+fi
 
 # Render compose (Vertica only)
 cat >/opt/compose.remote.yml <<'YAML'
