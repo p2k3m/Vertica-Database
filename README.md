@@ -56,13 +56,27 @@ Optional repository variables:
 
 ### Connect to Vertica
 
-Use the outputs captured in the workflow summary:
+Use the outputs captured in the workflow summary. Terraform now exposes a consolidated
+`connection_details` output and the helper script below prints the same information
+locally:
 
-- Host: public IP (`public_ip` output)
+```bash
+terraform -chdir=infra output connection_details
+python scripts/show_connection_info.py
+```
+
+Expected fields:
+
+- Connection URL: `vertica://dbadmin@<public-host>:5433/VMart`
+- Public IP (`public_ip` output)
+- Public DNS (`public_dns` output)
 - Port: `5433`
 - User: `dbadmin`
 - Password: *(empty)*
 - Database: `VMart`
+
+The Terraform security group allows TCP/5433 from `0.0.0.0/0` by default, so the
+instance is publicly reachable unless you override `allowed_cidrs`.
 
 You can run `pytest tests/test_connect.py -q` after installing `tests/requirements.txt`. The test automatically reads the
 Terraform outputs (`public_ip` first, then `public_dns`) from the `infra/` directory, so you do not need to set
