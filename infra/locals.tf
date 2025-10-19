@@ -5,4 +5,8 @@ locals {
   role_name     = "${local.project}-ec2-role"
   profile_name  = "${local.project}-profile"
   instance_name = "${local.project}-host"
+  vertica_port  = 5433
+  vertica_user  = "dbadmin"
+  vertica_pass  = ""
+  vertica_db    = "VMart"
 }
