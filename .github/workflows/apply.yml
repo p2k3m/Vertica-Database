@@ -146,15 +146,15 @@ jobs:
         run: |
           pipx install vertica-python
           python - <<'PY'
-import os
-import vertica_python
-host = os.environ['HOST']
-config = dict(host=host, port=5433, user='dbadmin', password='', database='VMart')
-with vertica_python.connect(**config) as conn:
-    cur = conn.cursor()
-    cur.execute('SELECT 1')
-    assert cur.fetchone()[0] == 1
-    cur.execute('SELECT table_name FROM v_catalog.tables LIMIT 1')
-    assert cur.fetchone() is not None
-print('Vertica connection succeeded')
-PY
+          import os
+          import vertica_python
+          host = os.environ['HOST']
+          config = dict(host=host, port=5433, user='dbadmin', password='', database='VMart')
+          with vertica_python.connect(**config) as conn:
+              cur = conn.cursor()
+              cur.execute('SELECT 1')
+              assert cur.fetchone()[0] == 1
+              cur.execute('SELECT table_name FROM v_catalog.tables LIMIT 1')
+              assert cur.fetchone() is not None
+          print('Vertica connection succeeded')
+          PY
