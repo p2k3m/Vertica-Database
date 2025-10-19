@@ -78,21 +78,21 @@ jobs:
         run: |
           pipx install vertica-python
           python - <<'PY'
-import os, time, socket
-import vertica_python
-host='${{ steps.out.outputs.ip }}'; port=5433
-t0=time.time()
-while time.time()-t0<300:
-    try:
-        with socket.create_connection((host,port),2):
-            break
-    except OSError:
-        time.sleep(3)
-cfg=dict(host=host, port=port, user='dbadmin', password='', database='VMart')
-with vertica_python.connect(**cfg) as c:
-    cur=c.cursor(); cur.execute('SELECT 1'); assert cur.fetchone()[0]==1
-    print('OK')
-PY
+          import os, time, socket
+          import vertica_python
+          host='${{ steps.out.outputs.ip }}'; port=5433
+          t0=time.time()
+          while time.time()-t0<300:
+              try:
+                  with socket.create_connection((host, port), 2):
+                      break
+              except OSError:
+                  time.sleep(3)
+          cfg=dict(host=host, port=port, user='dbadmin', password='', database='VMart')
+          with vertica_python.connect(**cfg) as c:
+              cur=c.cursor(); cur.execute('SELECT 1'); assert cur.fetchone()[0]==1
+              print('OK')
+          PY
 
       - name: Job summary
         run: |
