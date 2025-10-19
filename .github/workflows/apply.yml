@@ -56,12 +56,19 @@ jobs:
         working-directory: infra
         run: |
           terraform validate
+          code=0
           terraform plan -detailed-exitcode \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="aws_account_id=${{ env.AWS_ACCOUNT_ID }}" \
             -var="allowed_cidrs=[\"${{ vars.ALLOWED_CIDR || '0.0.0.0/0' }}\"]" \
             -var="vertica_image=${{ vars.VERTICA_IMAGE || '957650740525.dkr.ecr.ap-south-1.amazonaws.com/vertica-ce:v1.0' }}" \
-            || code=$?; echo plan_exit=$code; [ "$code" = "2" ] || [ "$code" = "0" ] || exit $code
+            || code=$?
+          echo plan_exit=$code
+          if [ "$code" = "2" ] || [ "$code" = "0" ]; then
+            exit 0
+          else
+            exit "$code"
+          fi
 
       - name: Apply
         working-directory: infra
