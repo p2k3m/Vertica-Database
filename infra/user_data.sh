@@ -23,8 +23,8 @@ VERTICA_IMAGE="${vertica_image}"
 
 # ECR (or ECR Public) login if the image requires it (best effort)
 if [[ "$VERTICA_IMAGE" =~ ^([0-9]+\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com)(/.+)$ ]]; then
-  ECR_HOST="${BASH_REMATCH[1]}"
-  ECR_REGION="${BASH_REMATCH[2]}"
+  ECR_HOST="$${BASH_REMATCH[1]}"
+  ECR_REGION="$${BASH_REMATCH[2]}"
   aws ecr get-login-password --region "$ECR_REGION" \
     | docker login --username AWS --password-stdin "$ECR_HOST" || true
 elif [[ "$VERTICA_IMAGE" =~ ^public\.ecr\.aws/ ]]; then
