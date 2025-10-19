@@ -69,6 +69,22 @@ Terraform outputs (`public_ip` first, then `public_dns`) from the `infra/` direc
 `VERTICA_HOST` manually. Environment variables `DB_HOST`/`VERTICA_HOST` and `DB_PORT`/`VERTICA_PORT` still override the
 defaults when provided.
 
+### Troubleshooting connectivity from CI sandboxes
+
+Some ephemeral CI environments (including the one used for the provided integration tests) block outbound traffic to
+arbitrary public IPs. When that happens, the Python smoke test will fail with a `vertica_python.errors.ConnectionError`
+and an underlying socket error such as `[Errno 101] Network is unreachable`. This is an infrastructure restriction of
+the sandbox, not a Vertica or Terraform misconfiguration—the deployed instance already allows ingress on port `5433`
+from the configured CIDR(s).
+
+To validate connectivity:
+
+1. Run the test from a workstation or runner that has outbound access to the instance's public IP.
+2. Alternatively, adjust your allow-list/VPC rules so that the environment executing the test can reach the host on
+   port `5433`.
+
+No repository changes are necessary once network access is available.
+
 ## Recreate or destroy
 
 - **Recreate:** Re-run the apply workflow with `recreate` set to `true`. This performs `terraform destroy` before a fresh apply, guaranteeing a clean instance.
