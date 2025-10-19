@@ -1,4 +1,6 @@
 import os
+import subprocess
+from pathlib import Path
 from typing import Optional
 
 import pytest
@@ -19,7 +21,56 @@ def _get_env_value(*keys: str, default: Optional[str] = None) -> str:
     raise KeyError(f"None of the environment variables {keys!r} are set")
 
 
-HOST = _get_env_value("DB_HOST", "VERTICA_HOST", default="localhost")
+DEFAULT_TERRAFORM_DIR = Path(__file__).resolve().parent.parent / "infra"
+
+
+def _get_terraform_output(name: str) -> Optional[str]:
+    """Return the Terraform output ``name`` if it can be resolved."""
+
+    terraform_dir = Path(os.getenv("TERRAFORM_DIR", DEFAULT_TERRAFORM_DIR))
+    if not terraform_dir.exists():
+        return None
+
+    try:
+        result = subprocess.run(
+            [
+                "terraform",
+                "-chdir",
+                str(terraform_dir),
+                "output",
+                "-raw",
+                name,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+    except subprocess.CalledProcessError:
+        return None
+
+    value = result.stdout.strip()
+    return value or None
+
+
+def _resolve_host() -> str:
+    """Choose the Vertica host from env vars, Terraform outputs, or localhost."""
+
+    env_host = _get_env_value("DB_HOST", "VERTICA_HOST", default=None)
+    if env_host:
+        return env_host
+
+    terraform_host = _get_terraform_output("public_ip") or _get_terraform_output(
+        "public_dns"
+    )
+    if terraform_host:
+        return terraform_host
+
+    return "localhost"
+
+
+HOST = _resolve_host()
 PORT = int(_get_env_value("DB_PORT", "VERTICA_PORT", default="5433"))
 CONFIG = {
     "host": HOST,

@@ -64,8 +64,10 @@ Use the outputs captured in the workflow summary:
 - Password: *(empty)*
 - Database: `VMart`
 
-You can also export `DB_HOST` (or `VERTICA_HOST`) locally and run `pytest tests/test_connect.py -q` after installing
-`tests/requirements.txt`. The port defaults to `5433`, but it can be overridden with `DB_PORT` or `VERTICA_PORT`.
+You can run `pytest tests/test_connect.py -q` after installing `tests/requirements.txt`. The test automatically reads the
+Terraform outputs (`public_ip` first, then `public_dns`) from the `infra/` directory, so you do not need to set
+`VERTICA_HOST` manually. Environment variables `DB_HOST`/`VERTICA_HOST` and `DB_PORT`/`VERTICA_PORT` still override the
+defaults when provided.
 
 ## Recreate or destroy
 
