@@ -79,7 +79,7 @@ jobs:
 
       - name: Smoke test from runner
         env:
-          VERTICA_HOST: ${{ steps.out.outputs.ip }}
+          VERTICA_HOST: "${{ steps.out.outputs.ip }}"
         run: |
           python - <<'PY'
           import os
