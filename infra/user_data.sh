@@ -25,7 +25,7 @@ aws ecr get-login-password --region "$REGION" \
 cat >/opt/compose.remote.yml <<'YAML'
 services:
   vertica:
-    image: $${VERTICA_IMAGE}
+    image: ${vertica_image}
     container_name: vertica_ce
     restart: always
     ports: ["5433:5433"]
@@ -46,9 +46,6 @@ YAML
 
 mkdir -p /var/lib/vertica
 chmod 700 /var/lib/vertica
-
-VERTICA_IMAGE="${vertica_image}"
-sed -i "s|\${VERTICA_IMAGE}|${VERTICA_IMAGE}|g" /opt/compose.remote.yml
 
 # Start Vertica only
 curl -fsSL https://get.docker.com | sh || true
