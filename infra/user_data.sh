@@ -4,8 +4,9 @@ exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 
 # Install Docker and helpers
 amazon-linux-extras enable docker || true
-yum install -y docker jq nmap-ncat
+yum install -y amazon-ssm-agent docker jq nmap-ncat
 systemctl enable --now docker
+systemctl enable --now amazon-ssm-agent
 
 # Discover region/account from metadata
 REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)
