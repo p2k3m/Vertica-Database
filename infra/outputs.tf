@@ -12,3 +12,8 @@ output "sg_id" {
   description = "Security group ID allowing access to Vertica"
   value       = aws_security_group.db_sg.id
 }
+
+output "instance_id" {
+  description = "Instance ID hosting Vertica"
+  value       = aws_instance.host.id
+}

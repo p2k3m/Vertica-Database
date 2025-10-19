@@ -51,7 +51,7 @@ Optional repository variables:
    - `import-if-exists.sh` to adopt any matching resources (security group, IAM role/profile, EC2) before planning.
    - `terraform validate` and `plan` with detailed exit codes.
    - `terraform apply` using a Spot `t3.xlarge` (unless `use_spot` is overridden).
-   - Fetches Terraform outputs and runs a Python smoke test (`SELECT 1`).
+   - Fetches Terraform outputs and runs a Python smoke test (`SELECT 1`) directly on the host through AWS Systems Manager.
 4. The job summary lists the public IP plus connection details.
 
 ### Connect to Vertica
@@ -86,21 +86,12 @@ Network unreachable when connecting to Vertica host at 203.0.113.10:5433. This s
 Passing `--require-service` forces a non-zero exit code instead, which is useful when you expect the network path to be
 open and want the script to fail loudly.
 
-### Troubleshooting connectivity from CI sandboxes
+### How the automated smoke test works
 
-Some ephemeral CI environments (including the one used for the provided integration tests) block outbound traffic to
-arbitrary public IPs. When that happens, the Python smoke test will fail with a `vertica_python.errors.ConnectionError`
-and an underlying socket error such as `[Errno 101] Network is unreachable`. This is an infrastructure restriction of
-the sandbox, not a Vertica or Terraform misconfiguration—the deployed instance already allows ingress on port `5433`
-from the configured CIDR(s).
-
-To validate connectivity:
-
-1. Run the test from a workstation or runner that has outbound access to the instance's public IP.
-2. Alternatively, adjust your allow-list/VPC rules so that the environment executing the test can reach the host on
-   port `5433`.
-
-No repository changes are necessary once network access is available.
+The GitHub Actions workflow uses AWS Systems Manager to execute a Python script _on the Vertica instance itself_. This
+avoids the outbound-network restrictions that affect some CI sandboxes while still verifying that the database is up and
+can answer queries. If you prefer to verify connectivity from your own workstation or a different environment, use the
+pytest or CLI helpers in the `tests/` and `scripts/` directories as described above.
 
 ## Recreate or destroy
 

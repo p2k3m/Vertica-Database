@@ -85,37 +85,58 @@ jobs:
         run: |
           echo "ip=$(terraform output -raw public_ip)" >> $GITHUB_OUTPUT
           echo "dns=$(terraform output -raw public_dns)" >> $GITHUB_OUTPUT
+          echo "instance_id=$(terraform output -raw instance_id)" >> $GITHUB_OUTPUT
 
-      - name: Install vertica client
-        run: python -m pip install vertica-python
-
-      - name: Smoke test from runner
+      - name: Smoke test via SSM
         env:
-          VERTICA_HOST: "${{ steps.out.outputs.ip }}"
+          INSTANCE_ID: "${{ steps.out.outputs.instance_id }}"
         run: |
-          python - <<'PY'
-          import os
-          import socket
-          import time
+          set -euo pipefail
+          cat >ssm-commands.json <<'JSON'
+          {
+            "commands": [
+              "python3 -m pip install --quiet vertica-python",
+              "python3 -c 'import vertica_python; conn=vertica_python.connect(host=\"127.0.0.1\", port=5433, user=\"dbadmin\", password=\"\", database=\"VMart\"); cur=conn.cursor(); cur.execute(\"SELECT 1\"); print(cur.fetchone()[0])'"
+            ]
+          }
+          JSON
 
-          import vertica_python
+          command_id=$(aws ssm send-command \
+            --document-name AWS-RunShellScript \
+            --comment "Vertica smoke test" \
+            --instance-ids "$INSTANCE_ID" \
+            --parameters file://ssm-commands.json \
+            --query 'Command.CommandId' \
+            --output text)
 
-          host = os.environ["VERTICA_HOST"]
-          port = 5433
-          t0 = time.time()
-          while time.time() - t0 < 300:
-              try:
-                  with socket.create_connection((host, port), 2):
-                      break
-              except OSError:
-                  time.sleep(3)
-          cfg = dict(host=host, port=port, user="dbadmin", password="", database="VMart")
-          with vertica_python.connect(**cfg) as connection:
-              cursor = connection.cursor()
-              cursor.execute("SELECT 1")
-              assert cursor.fetchone()[0] == 1
-              print("OK")
-          PY
+          aws ssm wait command-executed --command-id "$command_id" --instance-id "$INSTANCE_ID"
+
+          status=$(aws ssm get-command-invocation \
+            --command-id "$command_id" \
+            --instance-id "$INSTANCE_ID" \
+            --query 'Status' \
+            --output text)
+
+          if [ "$status" != "Success" ]; then
+            aws ssm get-command-invocation \
+              --command-id "$command_id" \
+              --instance-id "$INSTANCE_ID"
+            exit 1
+          fi
+
+          output=$(aws ssm get-command-invocation \
+            --command-id "$command_id" \
+            --instance-id "$INSTANCE_ID" \
+            --query 'StandardOutputContent' \
+            --output text)
+
+          echo "$output"
+
+          last_line=$(printf '%s\n' "$output" | tail -n 1)
+          if [ "$last_line" != "1" ]; then
+            echo "Unexpected Vertica response" >&2
+            exit 1
+          fi
 
       - name: Job summary
         run: |
