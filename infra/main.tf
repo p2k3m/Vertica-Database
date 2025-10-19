@@ -145,6 +145,7 @@ resource "aws_instance" "host" {
     aws_account_id = var.aws_account_id,
     aws_region     = var.aws_region
   })
+  user_data_replace_on_change = true
 
   root_block_device {
     volume_type = "gp3"
