@@ -13,20 +13,6 @@ provider "aws" {
   region = var.aws_region
 }
 
-locals {
-  project = "vertica-db"
-  ingress_rules = {
-    vertica = {
-      description = "Vertica SQL"
-      port        = 5433
-    }
-    mcp = {
-      description = "MCP HTTP/SSE"
-      port        = 8000
-    }
-  }
-}
-
 data "aws_vpc" "default" {
   default = true
 }
@@ -49,30 +35,18 @@ data "aws_ami" "al2023" {
 }
 
 resource "aws_security_group" "db_sg" {
-  name        = "${local.project}-sg"
-  description = "Allow access to Vertica and MCP ports"
+  name        = local.sg_name
+  description = "Allow access to Vertica"
   vpc_id      = data.aws_vpc.default.id
 
   dynamic "ingress" {
     for_each = var.allowed_cidrs
     content {
-      description = local.ingress_rules.vertica.description
-      from_port   = local.ingress_rules.vertica.port
-      to_port     = local.ingress_rules.vertica.port
+      description = "Vertica SQL"
+      from_port   = 5433
+      to_port     = 5433
       protocol    = "tcp"
       cidr_blocks = [ingress.value]
-    }
-  }
-
-  dynamic "ingress" {
-    for_each = var.allowed_cidrs
-    iterator = cidr
-    content {
-      description = local.ingress_rules.mcp.description
-      from_port   = local.ingress_rules.mcp.port
-      to_port     = local.ingress_rules.mcp.port
-      protocol    = "tcp"
-      cidr_blocks = [cidr.value]
     }
   }
 
@@ -100,7 +74,7 @@ data "aws_iam_policy_document" "assume_ec2" {
 }
 
 resource "aws_iam_role" "ec2_role" {
-  name               = "${local.project}-ec2-role"
+  name               = local.role_name
   assume_role_policy = data.aws_iam_policy_document.assume_ec2.json
 
   tags = {
@@ -108,8 +82,8 @@ resource "aws_iam_role" "ec2_role" {
   }
 }
 
-resource "aws_iam_role_policy" "ecr_ssm" {
-  name = "${local.project}-ecr-ssm"
+resource "aws_iam_role_policy" "ecr_ssm_logs" {
+  name = "${local.project}-ecr-ssm-logs"
   role = aws_iam_role.ec2_role.id
 
   policy = jsonencode({
@@ -117,17 +91,29 @@ resource "aws_iam_role_policy" "ecr_ssm" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+        Action   = [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer"
+        ]
         Resource = "*"
       },
       {
         Effect   = "Allow"
-        Action   = ["ssm:*", "ec2messages:*", "ssmmessages:*"]
+        Action   = [
+          "ssm:*",
+          "ec2messages:*",
+          "ssmmessages:*"
+        ]
         Resource = "*"
       },
       {
         Effect = "Allow"
-        Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
         Resource = "*"
       }
     ]
@@ -135,14 +121,8 @@ resource "aws_iam_role_policy" "ecr_ssm" {
 }
 
 resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "${local.project}-profile"
+  name = local.profile_name
   role = aws_iam_role.ec2_role.name
-}
-
-locals {
-  compose_yaml = templatefile("${path.module}/templates/compose.remote.yml.tmpl", {
-    vertica_image = var.vertica_image
-  })
 }
 
 resource "aws_instance" "host" {
@@ -151,38 +131,30 @@ resource "aws_instance" "host" {
   subnet_id              = element(data.aws_subnets.default.ids, 0)
   vpc_security_group_ids = [aws_security_group.db_sg.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
-  key_name               = var.key_name
   associate_public_ip_address = true
 
-  instance_market_options {
-    market_type = "spot"
-  }
-
-  metadata_options {
-    http_tokens = "required"
+  dynamic "instance_market_options" {
+    for_each = var.use_spot ? [1] : []
+    content {
+      market_type = "spot"
+    }
   }
 
   user_data = templatefile("${path.module}/user_data.sh", {
-    aws_account_id = var.aws_account_id
-    vertica_image  = var.vertica_image
+    vertica_image  = var.vertica_image,
+    aws_account_id = var.aws_account_id,
     aws_region     = var.aws_region
-    compose_file   = local.compose_yaml
   })
 
   root_block_device {
-    volume_size = 20
     volume_type = "gp3"
-  }
-
-  ebs_block_device {
-    device_name           = "/dev/sdh"
-    volume_size           = 50
-    volume_type           = "gp3"
+    volume_size = 50
     delete_on_termination = true
   }
 
   tags = {
+    Name    = local.instance_name
     Project = local.project
-    Role    = "db-and-mcp"
+    Role    = "db"
   }
 }
