@@ -87,7 +87,7 @@ jobs:
           echo "dns=$(terraform output -raw public_dns)" >> $GITHUB_OUTPUT
 
       - name: Install vertica client
-        run: pipx install vertica-python
+        run: python -m pip install vertica-python
 
       - name: Smoke test from runner
         env:
