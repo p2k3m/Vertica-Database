@@ -80,8 +80,8 @@ jobs:
       - name: Smoke test from runner
         env:
           VERTICA_HOST: ${{ steps.out.outputs.ip }}
-        shell: python
         run: |
+          python - <<'PY'
           import os
           import socket
           import time
@@ -103,6 +103,7 @@ jobs:
               cursor.execute("SELECT 1")
               assert cursor.fetchone()[0] == 1
               print("OK")
+          PY
 
       - name: Job summary
         run: |
