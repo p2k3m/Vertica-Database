@@ -74,25 +74,35 @@ jobs:
           echo "ip=$(terraform output -raw public_ip)" >> $GITHUB_OUTPUT
           echo "dns=$(terraform output -raw public_dns)" >> $GITHUB_OUTPUT
 
+      - name: Install vertica client
+        run: pipx install vertica-python
+
       - name: Smoke test from runner
+        env:
+          VERTICA_HOST: ${{ steps.out.outputs.ip }}
+        shell: python
         run: |
-          pipx install vertica-python
-          python - <<'PY'
-          import os, time, socket
+          import os
+          import socket
+          import time
+
           import vertica_python
-          host='${{ steps.out.outputs.ip }}'; port=5433
-          t0=time.time()
-          while time.time()-t0<300:
+
+          host = os.environ["VERTICA_HOST"]
+          port = 5433
+          t0 = time.time()
+          while time.time() - t0 < 300:
               try:
                   with socket.create_connection((host, port), 2):
                       break
               except OSError:
                   time.sleep(3)
-          cfg=dict(host=host, port=port, user='dbadmin', password='', database='VMart')
-          with vertica_python.connect(**cfg) as c:
-              cur=c.cursor(); cur.execute('SELECT 1'); assert cur.fetchone()[0]==1
-              print('OK')
-          PY
+          cfg = dict(host=host, port=port, user="dbadmin", password="", database="VMart")
+          with vertica_python.connect(**cfg) as connection:
+              cursor = connection.cursor()
+              cursor.execute("SELECT 1")
+              assert cursor.fetchone()[0] == 1
+              print("OK")
 
       - name: Job summary
         run: |
