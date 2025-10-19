@@ -1,12 +1,25 @@
 import os
 import socket
 import time
+from typing import Optional
 
 import vertica_python
 
 
-HOST = os.getenv("DB_HOST", "localhost")
-PORT = int(os.getenv("DB_PORT", "5433"))
+def _get_env_value(*keys: str, default: Optional[str] = None) -> str:
+    """Return the first non-empty environment variable among ``keys``."""
+
+    for key in keys:
+        value = os.getenv(key)
+        if value:
+            return value
+    if default is not None:
+        return default
+    raise KeyError(f"None of the environment variables {keys!r} are set")
+
+
+HOST = _get_env_value("DB_HOST", "VERTICA_HOST", default="localhost")
+PORT = int(_get_env_value("DB_PORT", "VERTICA_PORT", default="5433"))
 CONFIG = {
     "host": HOST,
     "port": PORT,

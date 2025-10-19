@@ -64,7 +64,8 @@ Use the outputs captured in the workflow summary:
 - Password: *(empty)*
 - Database: `VMart`
 
-You can also export `DB_HOST` locally and run `pytest tests/test_connect.py -q` after installing `tests/requirements.txt`.
+You can also export `DB_HOST` (or `VERTICA_HOST`) locally and run `pytest tests/test_connect.py -q` after installing
+`tests/requirements.txt`. The port defaults to `5433`, but it can be overridden with `DB_PORT` or `VERTICA_PORT`.
 
 ## Recreate or destroy
 
