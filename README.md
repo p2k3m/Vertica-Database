@@ -69,17 +69,6 @@ Terraform outputs (`public_ip` first, then `public_dns`) from the `infra/` direc
 `VERTICA_HOST` manually. Environment variables `DB_HOST`/`VERTICA_HOST` and `DB_PORT`/`VERTICA_PORT` still override the
 defaults when provided.
 
-For ad-hoc verification without `pytest`, use the helper script:
-
-```bash
-python scripts/vertica_smoke.py
-```
-
-It mirrors the automated test but gracefully skips the SQL checks when the host
-cannot be reached (for example inside a sandboxed CI job). Pass
-`--require-service` if you want the command to fail instead of skipping when the
-socket is inaccessible.
-
 ### Troubleshooting connectivity from CI sandboxes
 
 Some ephemeral CI environments (including the one used for the provided integration tests) block outbound traffic to
@@ -93,11 +82,8 @@ To validate connectivity:
 1. Run the test from a workstation or runner that has outbound access to the instance's public IP.
 2. Alternatively, adjust your allow-list/VPC rules so that the environment executing the test can reach the host on
    port `5433`.
-3. If neither option is feasible, rely on `python scripts/vertica_smoke.py`,
-   which detects the blocked network and exits successfully after printing an
-   explanatory message. Pair this with the Terraform plan/apply output to
-   confirm the deployment succeeded even when the sandbox cannot reach the
-   public endpoint.
+
+No repository changes are necessary once network access is available.
 
 ## Recreate or destroy
 
