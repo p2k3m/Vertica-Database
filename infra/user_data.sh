@@ -1,73 +1,64 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec > >(tee /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1
+exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 
-AWS_ACCOUNT_ID="${aws_account_id}"
-VERTICA_IMAGE="${vertica_image}"
-DEFAULT_REGION="${aws_region}"
-
-# Install dependencies
-DNF_CMD=$(command -v dnf || echo "")
-if [[ -n "$DNF_CMD" ]]; then
-  dnf update -y
-  dnf install -y docker docker-compose-plugin jq nmap-ncat xfsprogs
-else
-  yum update -y
-  amazon-linux-extras enable docker
-  yum install -y docker docker-compose-plugin jq nmap-ncat xfsprogs
-fi
+# Install Docker and helpers
+amazon-linux-extras enable docker || true
+yum install -y docker jq nmap-ncat
 systemctl enable --now docker
 
-# Prepare data volume (formatted as XFS and mounted on /var/lib/vertica)
-DATA_DEVICE=""
-if [[ -b /dev/nvme1n1 ]]; then
-  DATA_DEVICE="/dev/nvme1n1"
-elif [[ -b /dev/xvdh ]]; then
-  DATA_DEVICE="/dev/xvdh"
-elif [[ -b /dev/sdh ]]; then
-  DATA_DEVICE="/dev/sdh"
+# Discover region/account from metadata
+REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)
+ACCOUNT_ID=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .accountId)
+if [[ -z "$REGION" || "$REGION" == "null" ]]; then
+  REGION="${aws_region}"
+fi
+if [[ -z "$ACCOUNT_ID" || "$ACCOUNT_ID" == "null" ]]; then
+  ACCOUNT_ID="${aws_account_id}"
 fi
 
-if [[ -n "$DATA_DEVICE" ]]; then
-  if ! blkid "$DATA_DEVICE" >/dev/null 2>&1; then
-    mkfs.xfs -f "$DATA_DEVICE"
-  fi
-  mkdir -p /var/lib/vertica
-  mount "$DATA_DEVICE" /var/lib/vertica
-  if ! grep -q "/var/lib/vertica" /etc/fstab; then
-    echo "$DATA_DEVICE /var/lib/vertica xfs defaults,nofail 0 2" >> /etc/fstab
-  fi
-fi
+# ECR login (best effort)
+aws ecr get-login-password --region "$REGION" \
+  | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com || true
+
+# Render compose (Vertica only)
+cat >/opt/compose.remote.yml <<'YAML'
+services:
+  vertica:
+    image: ${VERTICA_IMAGE}
+    container_name: vertica_ce
+    restart: always
+    ports: ["5433:5433"]
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - /var/lib/vertica:/data
+    environment:
+      - VERTICA_DB_NAME=VMart
+      - VERTICA_DB_USER=dbadmin
+      - VERTICA_DB_PASSWORD=
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "nc -z localhost 5433"]
+      interval: 15s
+      timeout: 3s
+      retries: 20
+YAML
+
 mkdir -p /var/lib/vertica
 chmod 700 /var/lib/vertica
 
-# Authenticate to ECR (best effort)
-IMDS_REGION=$$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region || true)
-REGION=$${IMDS_REGION:-$${DEFAULT_REGION}}
-if [[ -n "$${AWS_ACCOUNT_ID}" ]]; then
-  aws ecr get-login-password --region "$${REGION}" \
-    | docker login --username AWS --password-stdin "$${AWS_ACCOUNT_ID}".dkr.ecr."$${REGION}".amazonaws.com || true
-fi
+VERTICA_IMAGE="${vertica_image}"
+sed -i "s|\${VERTICA_IMAGE}|${VERTICA_IMAGE}|g" /opt/compose.remote.yml
 
-# Render docker compose definition
-cat >/opt/compose.remote.yml <<'YAML'
-${compose_file}
-YAML
+# Start Vertica only
+curl -fsSL https://get.docker.com | sh || true
+command -v docker compose >/dev/null 2>&1 || \
+  curl -L https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose && chmod +x /usr/local/bin/docker-compose
 
-# Start Vertica
-export VERTICA_IMAGE
-export AWS_ACCOUNT_ID
-docker compose -f /opt/compose.remote.yml pull || true
-docker compose -f /opt/compose.remote.yml up -d
+(docker compose -f /opt/compose.remote.yml up -d) || (docker-compose -f /opt/compose.remote.yml up -d)
 
-# Smoke check with retries
-for attempt in $$(seq 1 60); do
-  if nc -z 127.0.0.1 5433; then
-    echo "Vertica is accepting connections"
-    exit 0
-  fi
-  sleep 5
-  echo "Waiting for Vertica (attempt $${attempt})"
+# Wait for port
+for i in {1..60}; do
+  nc -z 127.0.0.1 5433 && exit 0 || sleep 5
 done
-
 exit 1
