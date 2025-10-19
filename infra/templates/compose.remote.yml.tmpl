@@ -1,0 +1,22 @@
+services:
+  vertica:
+    image: ${vertica_image}
+    container_name: vertica_ce
+    restart: always
+    ports:
+      - "5433:5433"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - /var/lib/vertica:/data
+    environment:
+      VERTICA_DB_NAME: VMart
+      VERTICA_DB_USER: dbadmin
+      VERTICA_DB_PASSWORD: ""
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "nc -z localhost 5433"]
+      interval: 15s
+      timeout: 3s
+      retries: 20

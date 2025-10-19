@@ -1,0 +1,160 @@
+
+name: Deploy Vertica DB (apply)
+
+on:
+  workflow_dispatch:
+    inputs:
+      allowed_cidr:
+        description: "CIDR block allowed to reach ports 5433/8000"
+        required: false
+        default: "0.0.0.0/0"
+      instance_type:
+        description: "EC2 instance type"
+        required: false
+        default: "t3.xlarge"
+      vertica_image:
+        description: "Override Vertica container image URI"
+        required: false
+        default: ""
+
+concurrency:
+  group: vertica-db-apply
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure AWS secrets are configured
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          missing=()
+          [[ -z "$AWS_ACCESS_KEY_ID" ]] && missing+=("AWS_ACCESS_KEY_ID")
+          [[ -z "$AWS_SECRET_ACCESS_KEY" ]] && missing+=("AWS_SECRET_ACCESS_KEY")
+          [[ -z "$AWS_REGION" ]] && missing+=("AWS_REGION")
+          [[ -z "$AWS_ACCOUNT_ID" ]] && missing+=("AWS_ACCOUNT_ID")
+          if (( ${#missing[@]} )); then
+            echo "Missing GitHub secrets: ${missing[*]}" >&2
+            echo "Define the secrets in the repository settings before running this workflow." >&2
+            exit 1
+          fi
+          echo "All required AWS secrets are present."
+
+  deploy:
+    needs: preflight
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      ALLOWED_CIDR: ${{ inputs.allowed_cidr || '0.0.0.0/0' }}
+      INSTANCE_TYPE: ${{ inputs.instance_type || 't3.xlarge' }}
+      VERTICA_IMAGE: ${{ inputs.vertica_image != '' && inputs.vertica_image || vars.VERTICA_IMAGE || '957650740525.dkr.ecr.ap-south-1.amazonaws.com/vertica-ce:v1.0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Bootstrap Terraform backend (idempotent)
+        working-directory: infra
+        run: ./backend-bootstrap.sh
+
+      - name: Configure Terraform backend
+        working-directory: infra
+        run: |
+          python - <<'PY'
+import os
+from pathlib import Path
+region = os.environ["AWS_REGION"]
+conf = Path("backend.conf").read_text().splitlines()
+lines = ["terraform {", "  backend \"s3\" {", f"    region = \"{region}\""]
+lines.extend(f"    {line}" for line in conf if line.strip())
+lines.append("  }")
+lines.append("}")
+Path("backend.tf").write_text("\n".join(lines) + "\n")
+PY
+
+      - name: Terraform init
+        working-directory: infra
+        run: terraform init -upgrade
+
+      - name: Terraform fmt
+        working-directory: infra
+        run: terraform fmt -check
+
+      - name: Terraform validate
+        working-directory: infra
+        run: terraform validate
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+
+      - name: Run TFLint
+        working-directory: infra
+        run: |
+          tflint --init
+          tflint
+
+      - name: Terraform apply
+        working-directory: infra
+        run: |
+          terraform apply -auto-approve \
+            -var="aws_region=${AWS_REGION}" \
+            -var="aws_account_id=${AWS_ACCOUNT_ID}" \
+            -var="instance_type=${INSTANCE_TYPE}" \
+            -var="vertica_image=${VERTICA_IMAGE}" \
+            -var="allowed_cidrs=[\"${ALLOWED_CIDR}\"]"
+
+      - name: Capture Terraform outputs
+        id: tf
+        working-directory: infra
+        run: |
+          echo "public_ip=$(terraform output -raw public_ip)" >> "$GITHUB_OUTPUT"
+          echo "public_dns=$(terraform output -raw public_dns)" >> "$GITHUB_OUTPUT"
+          echo "sg_id=$(terraform output -raw sg_id)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish outputs to summary
+        env:
+          PUBLIC_IP: ${{ steps.tf.outputs.public_ip }}
+          PUBLIC_DNS: ${{ steps.tf.outputs.public_dns }}
+          SG_ID: ${{ steps.tf.outputs.sg_id }}
+        run: |
+          {
+            echo "### Terraform outputs"
+            echo "- Public IP: `${PUBLIC_IP}`"
+            echo "- Public DNS: `${PUBLIC_DNS}`"
+            echo "- Security group ID: `${SG_ID}`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wait for Vertica port 5433
+        env:
+          HOST: ${{ steps.tf.outputs.public_ip }}
+        run: |
+          python tests/wait_for_port.py "$HOST" 5433 --timeout 180
+
+      - name: Smoke test with vertica-python
+        env:
+          HOST: ${{ steps.tf.outputs.public_ip }}
+        run: |
+          pipx install vertica-python
+          python - <<'PY'
+import os
+import vertica_python
+host = os.environ['HOST']
+config = dict(host=host, port=5433, user='dbadmin', password='', database='VMart')
+with vertica_python.connect(**config) as conn:
+    cur = conn.cursor()
+    cur.execute('SELECT 1')
+    assert cur.fetchone()[0] == 1
+    cur.execute('SELECT table_name FROM v_catalog.tables LIMIT 1')
+    assert cur.fetchone() is not None
+print('Vertica connection succeeded')
+PY
