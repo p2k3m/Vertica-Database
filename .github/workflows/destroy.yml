@@ -1,0 +1,52 @@
+
+name: Destroy Vertica DB (destroy)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Bootstrap Terraform backend (idempotent)
+        working-directory: infra
+        run: ./backend-bootstrap.sh
+
+      - name: Configure Terraform backend
+        working-directory: infra
+        run: |
+          python - <<'PY'
+import os
+from pathlib import Path
+region = os.environ["AWS_REGION"]
+conf = Path("backend.conf").read_text().splitlines()
+lines = ["terraform {", "  backend \"s3\" {", f"    region = \"{region}\""]
+lines.extend(f"    {line}" for line in conf if line.strip())
+lines.append("  }")
+lines.append("}")
+Path("backend.tf").write_text("\n".join(lines) + "\n")
+PY
+
+      - name: Terraform init
+        working-directory: infra
+        run: terraform init
+
+      - name: Terraform destroy
+        working-directory: infra
+        run: |
+          terraform destroy -auto-approve \
+            -var="aws_region=${AWS_REGION}" \
+            -var="aws_account_id=${AWS_ACCOUNT_ID}"
+        continue-on-error: true
