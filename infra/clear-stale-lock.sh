@@ -3,18 +3,8 @@ set -euo pipefail
 
 : "${AWS_REGION:?set AWS_REGION}" || exit 1
 
-REPO_SLUG=${GITHUB_REPOSITORY:-local}
-REPO_SLUG=${REPO_SLUG//\//-}
-REPO_SLUG=$(printf '%s' "$REPO_SLUG" | tr '[:upper:]' '[:lower:]')
-REPO_SLUG=$(printf '%s' "$REPO_SLUG" | tr -c 'a-z0-9-' '-')
-
-BUCKET="tfstate-${REPO_SLUG}-${AWS_REGION}"
 TABLE="tf-locks"
 KEY_PATH="state/terraform.tfstate"
-TARGET_PATHS=(
-  "${BUCKET}/${KEY_PATH}"
-  "${KEY_PATH}"
-)
 STALE_AFTER_SECONDS=${STALE_AFTER_SECONDS:-1800}
 
 declare -A SEEN_LOCKS=()
@@ -38,6 +28,61 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "Python interpreter not found; skipping Terraform lock cleanup" >&2
   exit 0
 fi
+
+determine_repo_identifier() {
+  local slug_source="${GITHUB_REPOSITORY:-}"
+
+  if [[ -z "$slug_source" ]] && command -v git >/dev/null 2>&1; then
+    local remote
+    remote=$(git config --get remote.origin.url 2>/dev/null || true)
+    if [[ -n "$remote" ]]; then
+      slug_source=$("$PYTHON_BIN" - "$remote" <<'PY' || true
+import re
+import sys
+
+remote = sys.argv[1].strip()
+if not remote:
+    sys.exit(1)
+
+remote = remote.rstrip('/')
+remote = re.sub(r"\.git$", "", remote)
+
+if remote.startswith("git@"):
+    remote = remote.split(":", 1)[-1]
+elif "://" in remote:
+    remote = remote.split("://", 1)[-1]
+
+remote = remote.lstrip("/")
+remote = re.sub(r"^github\.com[:/]", "", remote, flags=re.IGNORECASE)
+
+parts = [part for part in re.split(r"[/:]", remote) if part]
+if len(parts) >= 2:
+    print(parts[-2] + "/" + parts[-1])
+    sys.exit(0)
+
+sys.exit(1)
+PY
+)
+    fi
+  fi
+
+  if [[ -z "$slug_source" ]]; then
+    slug_source=local
+  fi
+
+  printf '%s' "$slug_source"
+}
+
+REPO_SLUG=$(determine_repo_identifier)
+REPO_SLUG=${REPO_SLUG//\//-}
+REPO_SLUG=$(printf '%s' "$REPO_SLUG" | tr '[:upper:]' '[:lower:]')
+REPO_SLUG=$(printf '%s' "$REPO_SLUG" | tr -c 'a-z0-9-' '-')
+
+BUCKET="tfstate-${REPO_SLUG}-${AWS_REGION}"
+TARGET_PATHS=(
+  "${BUCKET}/${KEY_PATH}"
+  "${KEY_PATH}"
+)
 
 parse_timestamp() {
   local raw="$1"
