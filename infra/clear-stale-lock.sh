@@ -248,7 +248,13 @@ clear_lock_item() {
 process_path() {
   local path="$1"
   local matches
-  matches=$(jq -r --arg path "$path" '.Items[]? | select(.Path.S == $path) | @base64' <<<"$scan_output" 2>/dev/null || true)
+  matches=$(jq -r --arg path "$path" '
+    .Items[]? |
+    (.Path.S // "") as $p |
+    select($p == $path or ($p | endswith($path))) |
+    @base64
+  ' <<<"$scan_output" 2>/dev/null || true)
+
   if [[ -z "$matches" ]]; then
     return
   fi
