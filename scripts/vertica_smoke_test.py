@@ -224,14 +224,78 @@ def _docker_inspect(container: str, template: str) -> Optional[str]:
     return value or None
 
 
+def _docker_compose_plugin_available() -> bool:
+    """Return True if ``docker compose`` is usable via the CLI plugin."""
+
+    result = subprocess.run(
+        ['docker', 'compose', 'version'],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _ensure_docker_compose_cli() -> None:
+    """Ensure that either ``docker compose`` or ``docker-compose`` is available."""
+
+    if _docker_compose_plugin_available() or shutil.which('docker-compose') is not None:
+        return
+
+    log(STEP_SEPARATOR)
+    log('Docker Compose CLI not available; attempting installation')
+
+    install_sequences: list[list[list[str]]] = []
+
+    if shutil.which('dnf'):
+        install_sequences.append([
+            ['dnf', 'install', '-y', 'docker-compose-plugin'],
+        ])
+
+    if shutil.which('yum'):
+        install_sequences.append([
+            ['yum', 'install', '-y', 'docker-compose-plugin'],
+        ])
+
+    if shutil.which('apt-get'):
+        install_sequences.append([
+            ['apt-get', 'update'],
+            ['apt-get', 'install', '-y', 'docker-compose-plugin'],
+        ])
+
+    pip_executable = shutil.which('pip3') or shutil.which('pip')
+    if pip_executable:
+        install_sequences.append([
+            [pip_executable, 'install', '--quiet', '--upgrade', 'docker-compose'],
+        ])
+
+    for sequence in install_sequences:
+        commands_preview = ' && '.join(' '.join(part) for part in sequence)
+        log(STEP_SEPARATOR)
+        log(f'Attempting to install Docker Compose using: {commands_preview}')
+        try:
+            for command in sequence:
+                run_command(command)
+        except SystemExit as exc:
+            log(f'Docker Compose installation attempt failed: {exc}')
+            continue
+
+        if _docker_compose_plugin_available() or shutil.which('docker-compose') is not None:
+            return
+
+    if not (_docker_compose_plugin_available() or shutil.which('docker-compose') is not None):
+        raise SystemExit('Docker Compose CLI is not available after installation attempts')
+
+
 def _compose_command() -> Optional[list[str]]:
-    compose_paths = [
-        ['docker', 'compose', '-f', '/opt/compose.remote.yml', 'up', '-d'],
-        ['docker-compose', '-f', '/opt/compose.remote.yml', 'up', '-d'],
-    ]
-    for command in compose_paths:
-        if shutil.which(command[0]) is not None:
-            return command
+    compose_commands: list[list[str]] = []
+    if _docker_compose_plugin_available():
+        compose_commands.append(['docker', 'compose', '-f', '/opt/compose.remote.yml', 'up', '-d'])
+    if shutil.which('docker-compose') is not None:
+        compose_commands.append(['docker-compose', '-f', '/opt/compose.remote.yml', 'up', '-d'])
+
+    for command in compose_commands:
+        return command
+
     return None
 
 
@@ -239,6 +303,7 @@ def ensure_vertica_container_running(timeout: float = 900.0) -> None:
     log(STEP_SEPARATOR)
     log('Ensuring Vertica container vertica_ce is running')
 
+    _ensure_docker_compose_cli()
     command = _compose_command()
     deadline = time.time() + timeout
     last_status: tuple[Optional[str], Optional[str]] = (None, None)
