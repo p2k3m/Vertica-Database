@@ -28,7 +28,7 @@
           "docker --version",
           "docker info",
           "docker ps --format 'table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'",
-          "docker inspect --format 'Image {{.Config.Image}} exposes {{range $key, $value := .Config.ExposedPorts}}{{$key}} {{end}}and binds {{range $p, $bindings := .NetworkSettings.Ports}}{{$p}} -> {{range $binding := $bindings}}{{$binding.HostIp}}:{{$binding.HostPort}} {{end}}{{end}}' vertica_ce",
+          "docker inspect vertica_ce",
           "ss -tulpn | grep ':${vertica_port}' || (echo '[error] Expected port ${vertica_port} not listening'; exit 1)",
           "echo '[info] Verifying Docker image availability for ${vertica_image}'",
           "if ! docker image inspect ${vertica_image} >/dev/null 2>&1; then docker pull ${vertica_image}; fi",
