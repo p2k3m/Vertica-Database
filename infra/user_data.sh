@@ -23,7 +23,7 @@ install -d -m 0755 /etc/amazon/ssm
 cat >/etc/amazon/ssm/amazon-ssm-agent.json <<EOF
 {
   "Agent": {
-    "Region": "${REGION}"
+    "Region": "$${REGION}"
   }
 }
 EOF
