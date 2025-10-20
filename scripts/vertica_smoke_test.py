@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -90,7 +91,91 @@ def fetch_metadata(path: str, timeout: float = 2.0) -> str:
         raise
 
 
-def wait_for_port(host: str, port: int, timeout: float = 600.0) -> None:
+def ensure_docker_service() -> None:
+    if shutil.which('systemctl') is None:
+        return
+
+    status = subprocess.run(
+        ['systemctl', 'is-active', '--quiet', 'docker'],
+        check=False,
+    )
+    if status.returncode == 0:
+        return
+
+    log(STEP_SEPARATOR)
+    log('Starting docker service via systemctl')
+    result = subprocess.run(
+        ['systemctl', 'start', 'docker'],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        if result.stdout:
+            log(result.stdout.rstrip())
+        if result.stderr:
+            log(f'[stderr] {result.stderr.rstrip()}')
+        raise SystemExit('Failed to start docker service via systemctl')
+
+
+def _docker_inspect(container: str, template: str) -> Optional[str]:
+    result = subprocess.run(
+        ['docker', 'inspect', '--format', template, container],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    if value == '<no value>':
+        return None
+    return value or None
+
+
+def _compose_command() -> Optional[list[str]]:
+    compose_paths = [
+        ['docker', 'compose', '-f', '/opt/compose.remote.yml', 'up', '-d'],
+        ['docker-compose', '-f', '/opt/compose.remote.yml', 'up', '-d'],
+    ]
+    for command in compose_paths:
+        if shutil.which(command[0]) is not None:
+            return command
+    return None
+
+
+def ensure_vertica_container_running(timeout: float = 900.0) -> None:
+    log(STEP_SEPARATOR)
+    log('Ensuring Vertica container vertica_ce is running')
+
+    command = _compose_command()
+    deadline = time.time() + timeout
+    last_status: tuple[Optional[str], Optional[str]] = (None, None)
+
+    while time.time() < deadline:
+        status = _docker_inspect('vertica_ce', '{{.State.Status}}')
+        health = _docker_inspect('vertica_ce', '{{if .State.Health}}{{.State.Health.Status}}{{end}}')
+        if status == 'running' and (not health or health == 'healthy'):
+            log(f'Vertica container status: {status}, health: {health or "unknown"}')
+            return
+
+        if (status, health) != last_status:
+            last_status = (status, health)
+            log(f'Current Vertica container status: {status or "<absent>"}, health: {health or "<unknown>"}')
+
+        if status is None:
+            if command is None:
+                raise SystemExit('Docker compose is not available to start vertica_ce container')
+            run_command(command)
+        elif status not in {'running', 'restarting'}:
+            run_command(['docker', 'start', 'vertica_ce'])
+
+        time.sleep(5)
+
+    raise SystemExit(
+        'Vertica container vertica_ce did not reach running & healthy state before timeout'
+    )
+
+
+def wait_for_port(host: str, port: int, timeout: float = 900.0) -> None:
     deadline = time.time() + timeout
     last_error: Optional[Exception] = None
     while time.time() < deadline:
@@ -132,7 +217,9 @@ def main() -> int:
     log(f'Instance local IPv4: {local_ipv4}')
     log(f'Instance public IPv4: {public_ipv4}')
 
-    wait_for_port('127.0.0.1', DB_PORT, timeout=600.0)
+    ensure_docker_service()
+    ensure_vertica_container_running()
+    wait_for_port('127.0.0.1', DB_PORT, timeout=900.0)
     log('Verified Vertica port 5433 is accepting TCP connections on localhost')
 
     run_command(['docker', 'ps', '--format', '{{.Names}}\t{{.Status}}'])
