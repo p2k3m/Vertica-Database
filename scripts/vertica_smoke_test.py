@@ -2,6 +2,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -448,27 +449,64 @@ def _repair_missing_urllib3() -> bool:
 
     _URLLIB3_REPAIR_ATTEMPTED = True
 
-    pip_executable = shutil.which('pip3') or shutil.which('pip')
-    if pip_executable is None:
-        log('Unable to repair missing urllib3 dependency because pip is unavailable')
-        return False
-
     log(STEP_SEPARATOR)
     log('Attempting to reinstall urllib3 for AWS CLI compatibility')
 
-    result = subprocess.run(
-        [pip_executable, 'install', '--quiet', 'urllib3<2'],
-        capture_output=True,
-        text=True,
-    )
+    aws_executable = shutil.which('aws')
+    python_from_aws: Optional[str] = None
 
-    if result.returncode == 0:
-        return True
+    if aws_executable:
+        try:
+            first_line = Path(aws_executable).read_text(errors='ignore').splitlines()[0]
+        except (OSError, IndexError):
+            first_line = ''
+        if first_line.startswith('#!'):
+            shebang_cmd = first_line[2:].strip()
+            if shebang_cmd:
+                candidate = shlex.split(shebang_cmd)[0]
+                if candidate and Path(candidate).exists():
+                    python_from_aws = candidate
 
-    if result.stdout:
-        log(result.stdout.rstrip())
-    if result.stderr:
-        log(f'[stderr] {result.stderr.rstrip()}')
+    install_commands: list[list[str]] = []
+    if python_from_aws:
+        install_commands.append([python_from_aws, '-m', 'pip'])
+
+    pip3_exe = shutil.which('pip3')
+    if pip3_exe and (not install_commands or pip3_exe not in {cmd[0] for cmd in install_commands}):
+        install_commands.append([pip3_exe])
+
+    pip_exe = shutil.which('pip')
+    if pip_exe and (not install_commands or pip_exe not in {cmd[0] for cmd in install_commands}):
+        install_commands.append([pip_exe])
+
+    if not install_commands:
+        log('Unable to repair missing urllib3 dependency because pip is unavailable')
+        return False
+
+    for base_command in install_commands:
+        for extra_args in ([], ['--break-system-packages']):
+            command = [*base_command, 'install', '--quiet', 'urllib3<2', *extra_args]
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return True
+
+            needs_retry_with_break = (
+                not extra_args
+                and 'externally-managed-environment' in (result.stderr or '')
+            )
+
+            if result.stdout:
+                log(result.stdout.rstrip())
+            if result.stderr:
+                log(f'[stderr] {result.stderr.rstrip()}')
+
+            if not needs_retry_with_break:
+                break
+
     log('Failed to reinstall urllib3 dependency')
     return False
 
