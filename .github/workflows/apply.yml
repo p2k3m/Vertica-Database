@@ -94,7 +94,7 @@ jobs:
           INSTANCE_ID: "${{ steps.out.outputs.instance_id }}"
           ADMIN_USER: "${{ steps.out.outputs.admin_user }}"
           ADMIN_PASSWORD: "${{ steps.out.outputs.admin_pass }}"
-        run: |
+        run: |10
           set -euo pipefail
           echo "Waiting for instance $INSTANCE_ID to pass EC2 status checks..."
           if ! aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"; then
@@ -126,28 +126,28 @@ jobs:
           echo "Instance registration detected: $ssm_entry"
 
           python - <<'PY'
-import json
-import os
-import shlex
-from pathlib import Path
+          import json
+          import os
+          import shlex
+          from pathlib import Path
 
-script = Path("scripts/vertica_smoke_test.py").read_text().rstrip()
-admin_user = os.environ["ADMIN_USER"]
-admin_password = os.environ["ADMIN_PASSWORD"]
+          script = Path("scripts/vertica_smoke_test.py").read_text().rstrip()
+          admin_user = os.environ["ADMIN_USER"]
+          admin_password = os.environ["ADMIN_PASSWORD"]
 
-env_parts = [
-    f"ADMIN_USER={shlex.quote(admin_user)}",
-    f"ADMIN_PASSWORD={shlex.quote(admin_password)}",
-]
-commands = [
-    "set -euo pipefail",
-    "python3 -m pip install --quiet vertica-python",
-    f"{' '.join(env_parts)} python3 <<'PY'\n{script}\nPY",
-]
-Path("ssm-commands.json").write_text(
-    json.dumps({"commands": commands}, indent=2)
-)
-PY
+          env_parts = [
+              f"ADMIN_USER={shlex.quote(admin_user)}",
+              f"ADMIN_PASSWORD={shlex.quote(admin_password)}",
+          ]
+          commands = [
+              "set -euo pipefail",
+              "python3 -m pip install --quiet vertica-python",
+              f"{' '.join(env_parts)} python3 <<'PY'\n{script}\nPY",
+          ]
+          Path("ssm-commands.json").write_text(
+              json.dumps({"commands": commands}, indent=2)
+          )
+          PY
 
           command_id=$(aws ssm send-command \
             --document-name AWS-RunShellScript \
