@@ -23,14 +23,25 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      - name: Clear stale Terraform lock (idempotent)
+        working-directory: infra
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: ./clear-stale-lock.sh
+
       - name: Backend & init
         working-directory: infra
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
           bash backend-bootstrap.sh
+          ./clear-stale-lock.sh
           terraform init
 
       - name: Destroy
         working-directory: infra
-        run: terraform destroy -auto-approve || true
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          ./clear-stale-lock.sh
+          terraform destroy -auto-approve || true

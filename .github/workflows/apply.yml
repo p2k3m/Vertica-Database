@@ -34,6 +34,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      - name: Clear stale Terraform lock (idempotent)
+        working-directory: infra
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+        run: ./clear-stale-lock.sh
+
       - name: Bootstrap remote backend (idempotent)
         working-directory: infra
         run: |
@@ -55,6 +61,7 @@ jobs:
       - name: Validate & Plan (detailed exit code)
         working-directory: infra
         run: |
+          ./clear-stale-lock.sh
           terraform validate
           code=0
           terraform plan -detailed-exitcode \
@@ -73,6 +80,7 @@ jobs:
       - name: Apply
         working-directory: infra
         run: |
+          ./clear-stale-lock.sh
           terraform apply -auto-approve \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="aws_account_id=${{ env.AWS_ACCOUNT_ID }}" \
