@@ -44,27 +44,85 @@ parse_timestamp() {
   [[ -z "$raw" ]] && return 1
 
   "$PYTHON_BIN" - "$raw" <<'PY'
+import re
 import sys
 from datetime import datetime, timezone
 
-raw = sys.argv[1]
+raw = sys.argv[1].strip()
+if not raw:
+    sys.exit(1)
 
-for fmt in (
-    "%Y-%m-%dT%H:%M:%S.%fZ",
-    "%Y-%m-%d %H:%M:%S.%f %z",
-    "%Y-%m-%dT%H:%M:%SZ",
-    "%Y-%m-%d %H:%M:%S %z",
-):
+variants = {raw}
+
+def add_variant(value):
+    value = value.strip()
+    if value:
+        variants.add(value)
+
+for suffix in (" UTC", " GMT", " Z"):
+    if raw.endswith(suffix):
+        add_variant(raw[: -len(suffix)])
+
+if raw.endswith("Z"):
+    add_variant(raw[:-1] + "+00:00")
+
+if "T" in raw:
+    add_variant(raw.replace("T", " "))
+
+normalised = set()
+for candidate in variants:
+    candidate = candidate.strip()
+    if not candidate:
+        continue
+
+    match = re.search(r"\.\d+", candidate)
+    if match:
+        frac = match.group(0)[1:]
+        if len(frac) > 6:
+            candidate = candidate[: match.start() + 1] + frac[:6] + candidate[match.end():]
+        elif len(frac) < 6:
+            candidate = candidate[: match.start() + 1] + frac.ljust(6, "0") + candidate[match.end():]
+
+    candidate = re.sub(r"([+-]\d{2})(\d{2})(?!:)", r"\1:\2", candidate)
+
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+
+    normalised.add(candidate)
+
+for candidate in normalised:
     try:
-        dt = datetime.strptime(raw, fmt)
+        dt = datetime.fromisoformat(candidate)
+    except ValueError:
+        continue
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+
+    print(int(dt.timestamp()))
+    sys.exit(0)
+
+for candidate in normalised:
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%d %H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S%z",
+    ):
+        try:
+            dt = datetime.strptime(candidate, fmt)
+        except ValueError:
+            continue
+
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         else:
             dt = dt.astimezone(timezone.utc)
+
         print(int(dt.timestamp()))
         sys.exit(0)
-    except ValueError:
-        continue
 
 sys.exit(1)
 PY
@@ -83,6 +141,12 @@ is_stale() {
 
   local now_epoch
   now_epoch=$(date -u +%s)
+  local future_tolerance=${FUTURE_TOLERANCE_SECONDS:-300}
+
+  if (( epoch > now_epoch + future_tolerance )); then
+    return 0
+  fi
+
   (( now_epoch - epoch >= STALE_AFTER_SECONDS ))
 }
 
@@ -101,7 +165,22 @@ clear_lock_item() {
 
   local created
   created=$(jq -r '(.Created.S // empty) // (.Info.S | fromjson? | .Created // empty)' <<<"$item_json" 2>/dev/null || true)
-  if ! is_stale "$created"; then
+
+  local operation
+  operation=$(jq -r '(.Operation.S // empty) // (.Info.S | fromjson? | .Operation // empty)' <<<"$item_json" 2>/dev/null || true)
+
+  local should_remove=1
+  local reason=""
+
+  if is_stale "$created"; then
+    reason="stale for at least ${STALE_AFTER_SECONDS}s"
+  elif [[ "$operation" == "OperationTypeInvalid" ]]; then
+    reason="invalid operation state"
+  else
+    should_remove=0
+  fi
+
+  if (( should_remove == 0 )); then
     return
   fi
 
@@ -114,7 +193,11 @@ clear_lock_item() {
     --key "$key_json" \
     --output json >/dev/null
 
-  echo "Removed stale Terraform lock for ${lock_id}" >&2
+  if [[ -n "$reason" ]]; then
+    reason=" (${reason})"
+  fi
+
+  echo "Removed Terraform lock for ${lock_id}${reason}" >&2
 }
 
 process_path() {
