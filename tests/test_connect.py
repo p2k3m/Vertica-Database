@@ -1,7 +1,8 @@
+import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import pytest
 import vertica_python
@@ -57,6 +58,42 @@ def _get_terraform_output(name: str) -> Optional[str]:
     return value or None
 
 
+def _get_connection_details() -> Dict[str, str]:
+    terraform_dir = Path(os.getenv("TERRAFORM_DIR", DEFAULT_TERRAFORM_DIR))
+    if not terraform_dir.exists():
+        return {}
+
+    command = [
+        "terraform",
+        "-chdir",
+        str(terraform_dir),
+        "output",
+        "-json",
+        "connection_details",
+    ]
+
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return {}
+
+    try:
+        parsed = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {}
+
+    if isinstance(parsed, dict):
+        value = parsed.get("value", parsed)
+        if isinstance(value, dict):
+            return {k: str(v) for k, v in value.items() if v is not None}
+    return {}
+
+
 def _resolve_host() -> str:
     """Choose the Vertica host from env vars, Terraform outputs, or localhost."""
 
@@ -75,11 +112,24 @@ def _resolve_host() -> str:
 
 HOST = _resolve_host()
 PORT = int(_get_env_value("DB_PORT", "VERTICA_PORT", default="5433"))
+DETAILS = _get_connection_details()
+DEFAULT_USER = (
+    DETAILS.get("username")
+    or DETAILS.get("additional_admin_username")
+    or DETAILS.get("bootstrap_admin_username")
+    or "appadmin"
+)
+DEFAULT_PASSWORD = (
+    DETAILS.get("password")
+    or DETAILS.get("additional_admin_password")
+    or DETAILS.get("bootstrap_admin_password")
+    or ""
+)
 CONFIG = {
     "host": HOST,
     "port": PORT,
-    "user": "dbadmin",
-    "password": "",
+    "user": _get_env_value("DB_USER", "VERTICA_USER", default=DEFAULT_USER),
+    "password": _get_env_value("DB_PASSWORD", "VERTICA_PASSWORD", default=DEFAULT_PASSWORD),
     "database": "VMart",
 }
 

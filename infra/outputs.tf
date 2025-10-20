@@ -34,5 +34,20 @@ output "connection_details" {
     username       = local.vertica_user
     password       = local.vertica_pass
     database       = local.vertica_db
+    bootstrap_admin_username  = local.bootstrap_admin_user
+    bootstrap_admin_password  = local.bootstrap_admin_pass
+    additional_admin_username = local.additional_admin_user
+    additional_admin_password = local.additional_admin_pass
   }
+}
+
+output "additional_admin_username" {
+  description = "Username for the additional Vertica administrator"
+  value       = local.additional_admin_user
+}
+
+output "additional_admin_password" {
+  description = "Password for the additional Vertica administrator"
+  value       = local.additional_admin_pass
+  sensitive   = true
 }

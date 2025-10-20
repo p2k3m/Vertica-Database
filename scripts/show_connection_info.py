@@ -19,6 +19,8 @@ _ENV_KEYS = {
     "username": ("DB_USER", "VERTICA_USER"),
     "password": ("DB_PASSWORD", "VERTICA_PASSWORD"),
     "database": ("DB_NAME", "VERTICA_DATABASE"),
+    "additional_admin_username": ("VERTICA_ADDITIONAL_ADMIN_USER",),
+    "additional_admin_password": ("VERTICA_ADDITIONAL_ADMIN_PASSWORD",),
 }
 
 
@@ -92,8 +94,10 @@ def _collect_details() -> Dict[str, str]:
             details[key] = env_value
 
     # Ensure sensible defaults when Terraform output is missing.
-    details.setdefault("username", "dbadmin")
-    details.setdefault("password", "")
+    details.setdefault("additional_admin_username", details.get("username", "appadmin"))
+    details.setdefault("additional_admin_password", details.get("password", ""))
+    details.setdefault("username", details["additional_admin_username"])
+    details.setdefault("password", details["additional_admin_password"])
     details.setdefault("database", "VMart")
     details.setdefault("port", "5433")
 
@@ -132,9 +136,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         ("Public DNS", details.get("public_dns", "")),
         ("Host", details.get("host", "")),
         ("Port", details.get("port", "")),
+        ("Database", details.get("database", "")),
         ("Database Username", details.get("username", "")),
         ("Database Password", details.get("password", "")),
-        ("Database", details.get("database", "")),
+        ("Additional Admin Username", details.get("additional_admin_username", "")),
+        ("Additional Admin Password", details.get("additional_admin_password", "")),
+        ("Bootstrap Admin Username", details.get("bootstrap_admin_username", "")),
+        ("Bootstrap Admin Password", details.get("bootstrap_admin_password", "")),
     ]
 
     print("Vertica connection details:")

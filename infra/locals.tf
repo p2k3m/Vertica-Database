@@ -6,7 +6,11 @@ locals {
   profile_name  = "${local.project}-profile"
   instance_name = "${local.project}-host"
   vertica_port  = 5433
-  vertica_user  = "dbadmin"
-  vertica_pass  = ""
+  bootstrap_admin_user = "dbadmin"
+  bootstrap_admin_pass = ""
+  additional_admin_user = var.additional_admin_username
+  additional_admin_pass = trimspace(var.additional_admin_password) != "" ? var.additional_admin_password : random_password.additional_admin.result
+  vertica_user  = local.additional_admin_user
+  vertica_pass  = local.additional_admin_pass
   vertica_db    = "VMart"
 }

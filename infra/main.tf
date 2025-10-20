@@ -6,11 +6,23 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 
 provider "aws" {
   region = var.aws_region
+}
+
+resource "random_password" "additional_admin" {
+  length      = 20
+  special     = false
+  min_lower   = 2
+  min_upper   = 2
+  min_numeric = 2
 }
 
 data "aws_vpc" "default" {
@@ -141,9 +153,15 @@ resource "aws_instance" "host" {
   }
 
   user_data = templatefile("${path.module}/user_data.sh", {
-    vertica_image  = var.vertica_image,
-    aws_account_id = var.aws_account_id,
-    aws_region     = var.aws_region
+    vertica_image               = var.vertica_image,
+    aws_account_id              = var.aws_account_id,
+    aws_region                  = var.aws_region,
+    bootstrap_admin_username    = local.bootstrap_admin_user,
+    bootstrap_admin_password    = local.bootstrap_admin_pass,
+    additional_admin_username   = local.additional_admin_user,
+    additional_admin_password   = local.additional_admin_pass,
+    vertica_db_name             = local.vertica_db,
+    vertica_port                = local.vertica_port
   })
   user_data_replace_on_change = true
 

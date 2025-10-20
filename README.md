@@ -67,12 +67,13 @@ python scripts/show_connection_info.py
 
 Expected fields:
 
-- Connection URL: `vertica://dbadmin@<public-host>:5433/VMart`
+- Connection URL: `vertica://<appadmin>:<password>@<public-host>:5433/VMart`
 - Public IP (`public_ip` output)
 - Public DNS (`public_dns` output)
 - Port: `5433`
-- User: `dbadmin`
-- Password: *(empty)*
+- Primary admin user: value of `additional_admin_username` output (defaults to `appadmin`)
+- Primary admin password: value of `additional_admin_password` output
+- Bootstrap user: `dbadmin` (empty password, retained for compatibility)
 - Database: `VMart`
 
 The Terraform security group allows TCP/5433 from `0.0.0.0/0` by default, so the
