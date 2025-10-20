@@ -169,7 +169,9 @@ jobs:
             --output text)
 
           status="InProgress"
-          deadline=$((SECONDS + 1200))
+          deadline=$((SECONDS + 2100))
+          last_status=""
+          last_details=""
           while [ $SECONDS -lt $deadline ]; do
             status=$(aws ssm get-command-invocation \
               --command-id "$command_id" \
@@ -178,6 +180,27 @@ jobs:
               --output text \
               2>/dev/null || echo "InProgress")
             status=${status:-InProgress}
+            status_details=$(aws ssm get-command-invocation \
+              --command-id "$command_id" \
+              --instance-id "$INSTANCE_ID" \
+              --query 'StatusDetails' \
+              --output text \
+              2>/dev/null || echo "")
+            status_details=${status_details:-}
+
+            if [ "$status" != "$last_status" ] || [ "$status_details" != "$last_details" ]; then
+              case "$status" in
+                InProgress|Pending|Delayed)
+                  if [ -n "$status_details" ]; then
+                    echo "  - SSM command still running (status: $status, details: $status_details)"
+                  else
+                    echo "  - SSM command still running (status: $status)"
+                  fi
+                  ;;
+              esac
+              last_status="$status"
+              last_details="$status_details"
+            fi
 
             case "$status" in
               Success)
@@ -199,6 +222,9 @@ jobs:
             aws ssm get-command-invocation \
               --command-id "$command_id" \
               --instance-id "$INSTANCE_ID" || true
+            aws ssm list-command-invocations \
+              --command-id "$command_id" \
+              --details || true
             exit 1
           fi
 
