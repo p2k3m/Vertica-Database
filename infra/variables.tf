@@ -23,8 +23,9 @@ variable "use_spot" {
 }
 
 variable "vertica_image" {
-  type    = string
-  default = "vertica/vertica-ce:24.2.0-0"
+  type        = string
+  description = "Docker image for the Vertica deployment"
+  default     = "957650740525.dkr.ecr.ap-south-1.amazonaws.com/vertica-ce:v1.0"
 }
 
 variable "additional_admin_username" {
@@ -37,5 +38,18 @@ variable "additional_admin_password" {
   type        = string
   default     = ""
   description = "Optional password for the additional Vertica administrator. Leave blank to auto-generate."
+  sensitive   = true
+}
+
+variable "smoke_test_username" {
+  type        = string
+  default     = "smoketester"
+  description = "Username created during the SSM smoke test to validate connectivity"
+}
+
+variable "smoke_test_password" {
+  type        = string
+  default     = ""
+  description = "Optional password used during the SSM smoke test. Leave blank to auto-generate."
   sensitive   = true
 }

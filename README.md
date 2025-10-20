@@ -35,7 +35,8 @@ Set these repository secrets before running the workflows:
 Optional repository variables:
 
 - `ALLOWED_CIDR` – lock down Vertica ingress (defaults to `0.0.0.0/0`)
-- `VERTICA_IMAGE` – override the Vertica CE image (`vertica/vertica-ce:24.2.0-0` by default)
+- `VERTICA_IMAGE` – override the Vertica CE image (defaults to the private ECR build `957650740525.dkr.ecr.ap-south-1.amazonaws.com/vertica-ce:v1.0`)
+- `SMOKE_TEST_USERNAME` / `SMOKE_TEST_PASSWORD` – customise the throwaway account created by the SSM smoke test
 
 ## Remote state bootstrap
 
@@ -51,7 +52,7 @@ Optional repository variables:
    - `import-if-exists.sh` to adopt any matching resources (security group, IAM role/profile, EC2) before planning.
    - `terraform validate` and `plan` with detailed exit codes.
    - `terraform apply` using a Spot `t3.xlarge` (unless `use_spot` is overridden).
-   - Fetches Terraform outputs and runs a Python smoke test (`SELECT 1`) directly on the host through AWS Systems Manager.
+   - Fetches Terraform outputs and runs a detailed Systems Manager smoke test that validates the SSM agent, Docker state, ECR image availability, Vertica connectivity (localhost + public IP), and user authentication (bootstrap, primary admin, and generated smoke-test account).
 4. The job summary lists the public IP plus connection details.
 
 ### Connect to Vertica
@@ -73,6 +74,8 @@ Expected fields:
 - Port: `5433`
 - Primary admin user: value of `additional_admin_username` output (defaults to `appadmin`)
 - Primary admin password: value of `additional_admin_password` output
+- Smoke-test user: value of `smoke_test_username` output (defaults to `smoketester`)
+- Smoke-test password: value of `smoke_test_password` output
 - Bootstrap user: `dbadmin` (empty password, retained for compatibility)
 - Database: `VMart`
 
@@ -105,8 +108,10 @@ open and want the script to fail loudly.
 
 The GitHub Actions workflow uses AWS Systems Manager to execute a Python script _on the Vertica instance itself_. This
 avoids the outbound-network restrictions that affect some CI sandboxes while still verifying that the database is up and
-can answer queries. If you prefer to verify connectivity from your own workstation or a different environment, use the
-pytest or CLI helpers in the `tests/` and `scripts/` directories as described above.
+can answer queries. Every run streams verbose diagnostics (SSM agent status, Docker details, port checks, Vertica SQL output)
+into the CloudWatch log group referenced by the `ssm_smoke_test_log_group` Terraform output. If you prefer to verify
+connectivity from your own workstation or a different environment, use the pytest or CLI helpers in the `tests/` and `scripts/`
+directories as described above.
 
 ## Recreate or destroy
 
