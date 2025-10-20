@@ -91,30 +91,68 @@ def fetch_metadata(path: str, timeout: float = 2.0) -> str:
         raise
 
 
+def _docker_info() -> subprocess.CompletedProcess[str]:
+    """Run ``docker info`` and return the completed process."""
+
+    return subprocess.run(
+        ['docker', 'info'],
+        capture_output=True,
+        text=True,
+    )
+
+
 def ensure_docker_service() -> None:
-    if shutil.which('systemctl') is None:
+    if shutil.which('docker') is None:
+        raise SystemExit('Docker CLI is not available on the instance')
+
+    info_result = _docker_info()
+    if info_result.returncode == 0:
         return
 
-    status = subprocess.run(
-        ['systemctl', 'is-active', '--quiet', 'docker'],
-        check=False,
-    )
-    if status.returncode == 0:
-        return
+    if shutil.which('systemctl') is None:
+        log(STEP_SEPARATOR)
+        log('Docker CLI found but daemon is unreachable and systemctl is unavailable')
+        if info_result.stderr:
+            log(f'[stderr] {info_result.stderr.rstrip()}')
+        raise SystemExit('Unable to manage docker daemon without systemctl')
 
     log(STEP_SEPARATOR)
-    log('Starting docker service via systemctl')
-    result = subprocess.run(
+    log('Docker daemon unavailable; attempting to start docker.service via systemctl')
+    start_result = subprocess.run(
         ['systemctl', 'start', 'docker'],
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        if result.stdout:
-            log(result.stdout.rstrip())
-        if result.stderr:
-            log(f'[stderr] {result.stderr.rstrip()}')
-        raise SystemExit('Failed to start docker service via systemctl')
+    if start_result.returncode != 0:
+        if start_result.stdout:
+            log(start_result.stdout.rstrip())
+        if start_result.stderr:
+            log(f'[stderr] {start_result.stderr.rstrip()}')
+
+        if 'Unit docker.service not found' in (start_result.stderr or '') and shutil.which('service'):
+            log('Attempting to start docker via the legacy service command')
+            legacy_result = subprocess.run(
+                ['service', 'docker', 'start'],
+                capture_output=True,
+                text=True,
+            )
+            if legacy_result.returncode != 0:
+                if legacy_result.stdout:
+                    log(legacy_result.stdout.rstrip())
+                if legacy_result.stderr:
+                    log(f'[stderr] {legacy_result.stderr.rstrip()}')
+            else:
+                info_result = _docker_info()
+                if info_result.returncode == 0:
+                    return
+
+        raise SystemExit('Failed to start docker daemon')
+
+    info_result = _docker_info()
+    if info_result.returncode != 0:
+        if info_result.stderr:
+            log(f'[stderr] {info_result.stderr.rstrip()}')
+        raise SystemExit('Docker daemon did not become available after start attempt')
 
 
 def _docker_inspect(container: str, template: str) -> Optional[str]:
