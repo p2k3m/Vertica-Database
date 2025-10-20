@@ -7,15 +7,21 @@ TABLE="tf-locks"
 KEY_PATH="state/terraform.tfstate"
 STALE_AFTER_SECONDS=${STALE_AFTER_SECONDS:-1800}
 
+log() {
+  local ts
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo "[clear-stale-lock] ${ts} $*" >&2
+}
+
 declare -A SEEN_LOCKS=()
 
 if ! command -v jq >/dev/null 2>&1; then
-  echo "jq not found; skipping Terraform lock cleanup" >&2
+  log "jq not found; skipping Terraform lock cleanup"
   exit 0
 fi
 
 if ! command -v aws >/dev/null 2>&1; then
-  echo "aws CLI not found; skipping Terraform lock cleanup" >&2
+  log "aws CLI not found; skipping Terraform lock cleanup"
   exit 0
 fi
 
@@ -25,7 +31,7 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
 fi
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "Python interpreter not found; skipping Terraform lock cleanup" >&2
+  log "Python interpreter not found; skipping Terraform lock cleanup"
   exit 0
 fi
 
@@ -83,6 +89,11 @@ TARGET_PATHS=(
   "${BUCKET}/${KEY_PATH}"
   "${KEY_PATH}"
 )
+
+log "AWS region: ${AWS_REGION}"
+log "DynamoDB table: ${TABLE}"
+log "Repository slug: ${REPO_SLUG}"
+log "Expected lock paths: ${TARGET_PATHS[*]}"
 
 parse_timestamp() {
   local raw="$1"
@@ -201,10 +212,12 @@ clear_lock_item() {
   local lock_id
   lock_id=$(jq -r '.LockID.S // empty' <<<"$item_json")
   if [[ -z "$lock_id" ]]; then
+    log "Skipping lock with missing LockID"
     return
   fi
 
   if [[ -n "${SEEN_LOCKS[$lock_id]:-}" ]]; then
+    log "Lock ${lock_id} already processed; skipping"
     return
   fi
 
@@ -262,6 +275,8 @@ clear_lock_item() {
   local should_remove=1
   local reason=""
 
+  log "Evaluating lock ${lock_id}: created='${created}' operation='${operation}'"
+
   if is_stale "$created"; then
     reason="stale for at least ${STALE_AFTER_SECONDS}s"
   elif [[ "$operation" == "OperationTypeInvalid" ]]; then
@@ -271,6 +286,7 @@ clear_lock_item() {
   fi
 
   if (( should_remove == 0 )); then
+    log "Leaving lock ${lock_id} untouched (path does not appear stale): created='${created}' operation='${operation}'"
     return
   fi
 
@@ -278,16 +294,19 @@ clear_lock_item() {
 
   local key_json
   key_json=$(jq -nc --arg key "$lock_id" '{LockID:{S:$key}}')
-  aws dynamodb delete-item \
+  local delete_output=""
+  if delete_output=$(aws dynamodb delete-item \
     --table-name "$TABLE" \
     --key "$key_json" \
-    --output json >/dev/null
-
-  if [[ -n "$reason" ]]; then
-    reason=" (${reason})"
+    --output json \
+    --region "$AWS_REGION" 2>&1); then
+    if [[ -n "$reason" ]]; then
+      reason=" (${reason})"
+    fi
+    log "Removed Terraform lock for ${lock_id}${reason}"
+  else
+    log "Failed to delete lock ${lock_id}; AWS CLI output: ${delete_output}"
   fi
-
-  echo "Removed Terraform lock for ${lock_id}${reason}" >&2
 }
 
 process_path() {
@@ -301,6 +320,7 @@ process_path() {
   ' <<<"$scan_output" 2>/dev/null || true)
 
   if [[ -z "$matches" ]]; then
+    log "No locks found for path ${path}"
     return
   fi
 
@@ -308,6 +328,9 @@ process_path() {
     [[ -z "$encoded" ]] && continue
     local item_json
     item_json=$(echo "$encoded" | base64 --decode)
+    local current_lock_id
+    current_lock_id=$(jq -r '.LockID.S // "unknown"' <<<"$item_json")
+    log "Processing lock for path ${path}: ${current_lock_id}"
     clear_lock_item "$item_json" || true
   done <<<"$matches"
 }
@@ -318,16 +341,28 @@ while :; do
     scan_output=$(aws dynamodb scan \
       --table-name "$TABLE" \
       --exclusive-start-key "$start_key" \
-      --output json 2>/dev/null || true)
+      --output json \
+      --region "$AWS_REGION" 2>&1) || {
+        log "Failed to scan DynamoDB table ${TABLE}: ${scan_output}"
+        break
+      }
   else
     scan_output=$(aws dynamodb scan \
       --table-name "$TABLE" \
-      --output json 2>/dev/null || true)
+      --output json \
+      --region "$AWS_REGION" 2>&1) || {
+        log "Failed to scan DynamoDB table ${TABLE}: ${scan_output}"
+        break
+      }
   fi
 
   if [[ -z "$scan_output" ]] || [[ "$scan_output" == "{}" ]]; then
+    log "No DynamoDB items returned; finishing"
     break
   fi
+
+  item_count=$(jq '.Items | length' <<<"$scan_output" 2>/dev/null || echo 0)
+  log "Fetched ${item_count} lock candidate(s) from DynamoDB"
 
   for candidate_path in "${TARGET_PATHS[@]}"; do
     process_path "$candidate_path"
@@ -335,6 +370,9 @@ while :; do
 
   start_key=$(jq -c '.LastEvaluatedKey // empty' <<<"$scan_output" 2>/dev/null || true)
   if [[ -z "$start_key" ]] || [[ "$start_key" == "null" ]]; then
+    log "Reached end of DynamoDB scan"
     break
   fi
 done
+
+log "Terraform lock cleanup finished"
