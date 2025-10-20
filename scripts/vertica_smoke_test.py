@@ -1,11 +1,13 @@
 import json
 import os
+import platform
 import shutil
 import socket
 import subprocess
 import sys
 import time
 import uuid
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from typing import Optional
@@ -282,8 +284,63 @@ def _ensure_docker_compose_cli() -> None:
         if _docker_compose_plugin_available() or shutil.which('docker-compose') is not None:
             return
 
+    if _download_docker_compose_binary():
+        return
+
     if not (_docker_compose_plugin_available() or shutil.which('docker-compose') is not None):
         raise SystemExit('Docker Compose CLI is not available after installation attempts')
+
+
+def _download_docker_compose_binary(version: str = 'v2.27.1') -> bool:
+    """Attempt to download the standalone Docker Compose binary as a fallback."""
+
+    system = sys.platform
+    if not system.startswith('linux'):
+        return False
+
+    architecture = platform.machine().lower()
+    arch_map = {
+        'x86_64': 'x86_64',
+        'amd64': 'x86_64',
+        'aarch64': 'aarch64',
+        'arm64': 'aarch64',
+    }
+
+    mapped_arch = arch_map.get(architecture)
+    if mapped_arch is None:
+        log(f'Unsupported architecture for Docker Compose binary download: {architecture}')
+        return False
+
+    url = (
+        'https://github.com/docker/compose/releases/download/'
+        f'{version}/docker-compose-linux-{mapped_arch}'
+    )
+    destination = Path('/usr/local/bin/docker-compose')
+
+    log(STEP_SEPARATOR)
+    log(f'Attempting to download Docker Compose binary from {url}')
+
+    try:
+        with urlopen(url, timeout=60) as response:
+            binary = response.read()
+    except Exception as exc:  # pragma: no cover - network failure path
+        log(f'Failed to download Docker Compose binary: {exc}')
+        return False
+
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(binary)
+        destination.chmod(0o755)
+    except Exception as exc:  # pragma: no cover - filesystem failure path
+        log(f'Failed to write Docker Compose binary to {destination}: {exc}')
+        return False
+
+    if shutil.which('docker-compose') is None:
+        log('Docker Compose binary download completed but command is still unavailable')
+        return False
+
+    log('Docker Compose binary installed successfully')
+    return True
 
 
 def _compose_command() -> Optional[list[str]]:
