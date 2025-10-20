@@ -102,8 +102,8 @@ resource "aws_iam_role_policy" "ecr_ssm_logs" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "ecr:GetAuthorizationToken",
           "ecr:BatchGetImage",
           "ecr:GetDownloadUrlForLayer"
@@ -111,8 +111,8 @@ resource "aws_iam_role_policy" "ecr_ssm_logs" {
         Resource = "*"
       },
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "ssm:*",
           "ec2messages:*",
           "ssmmessages:*"
@@ -138,11 +138,11 @@ resource "aws_iam_instance_profile" "ec2_profile" {
 }
 
 resource "aws_instance" "host" {
-  ami                    = data.aws_ami.al2023.id
-  instance_type          = var.instance_type
-  subnet_id              = element(data.aws_subnets.default.ids, 0)
-  vpc_security_group_ids = [aws_security_group.db_sg.id]
-  iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = var.instance_type
+  subnet_id                   = element(data.aws_subnets.default.ids, 0)
+  vpc_security_group_ids      = [aws_security_group.db_sg.id]
+  iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
   associate_public_ip_address = true
 
   dynamic "instance_market_options" {
@@ -153,21 +153,21 @@ resource "aws_instance" "host" {
   }
 
   user_data = templatefile("${path.module}/user_data.sh", {
-    vertica_image               = var.vertica_image,
-    aws_account_id              = var.aws_account_id,
-    aws_region                  = var.aws_region,
-    bootstrap_admin_username    = local.bootstrap_admin_user,
-    bootstrap_admin_password    = local.bootstrap_admin_pass,
-    additional_admin_username   = local.additional_admin_user,
-    additional_admin_password   = local.additional_admin_pass,
-    vertica_db_name             = local.vertica_db,
-    vertica_port                = local.vertica_port
+    vertica_image             = var.vertica_image,
+    aws_account_id            = var.aws_account_id,
+    aws_region                = var.aws_region,
+    bootstrap_admin_username  = local.bootstrap_admin_user,
+    bootstrap_admin_password  = local.bootstrap_admin_pass,
+    additional_admin_username = local.additional_admin_user,
+    additional_admin_password = local.additional_admin_pass,
+    vertica_db_name           = local.vertica_db,
+    vertica_port              = local.vertica_port
   })
   user_data_replace_on_change = true
 
   root_block_device {
-    volume_type = "gp3"
-    volume_size = 50
+    volume_type           = "gp3"
+    volume_size           = 50
     delete_on_termination = true
   }
 

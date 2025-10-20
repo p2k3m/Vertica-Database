@@ -9,8 +9,10 @@ output "public_dns" {
 }
 
 locals {
-  connection_host = aws_instance.host.public_dns != "" ? aws_instance.host.public_dns : aws_instance.host.public_ip
-  connection_auth = local.vertica_pass == "" ? local.vertica_user : "${local.vertica_user}:${local.vertica_pass}"
+  connection_host     = aws_instance.host.public_dns != "" ? aws_instance.host.public_dns : aws_instance.host.public_ip
+  connection_username = local.vertica_user
+  connection_password = local.vertica_pass == "" ? "" : nonsensitive(local.vertica_pass)
+  connection_url      = local.connection_password == "" ? "vertica://${local.connection_username}@${local.connection_host}:${local.vertica_port}/${local.vertica_db}" : "vertica://${local.connection_username}:${local.connection_password}@${local.connection_host}:${local.vertica_port}/${local.vertica_db}"
 }
 
 output "sg_id" {
@@ -26,19 +28,50 @@ output "instance_id" {
 output "connection_details" {
   description = "Connection information for the Vertica service"
   value = {
-    connection_url = "vertica://${local.connection_auth}@${local.connection_host}:${local.vertica_port}/${local.vertica_db}"
-    public_ip      = aws_instance.host.public_ip
-    public_dns     = aws_instance.host.public_dns
-    host           = local.connection_host
-    port           = local.vertica_port
-    username       = local.vertica_user
-    password       = local.vertica_pass
-    database       = local.vertica_db
+    connection_url            = local.connection_url
+    public_ip                 = aws_instance.host.public_ip
+    public_dns                = aws_instance.host.public_dns
+    host                      = local.connection_host
+    port                      = local.vertica_port
+    username                  = local.connection_username
+    password                  = local.connection_password
+    database                  = local.vertica_db
     bootstrap_admin_username  = local.bootstrap_admin_user
     bootstrap_admin_password  = local.bootstrap_admin_pass
     additional_admin_username = local.additional_admin_user
-    additional_admin_password = local.additional_admin_pass
+    additional_admin_password = local.connection_password
   }
+}
+
+output "connection_instructions" {
+  description = "Human-readable instructions for connecting to Vertica from any location"
+  value = join(
+    "\n",
+    [
+      format(
+        "Connect to the Vertica database using either DNS (%s) or the public IP address (%s).",
+        local.connection_host,
+        aws_instance.host.public_ip,
+      ),
+      "",
+      format("Connection URL: %s", local.connection_url),
+      "",
+      "CLI example using vsql:",
+      format(
+        "  vsql -h %s -p %d -d %s -U %s -w %s",
+        local.connection_host,
+        local.vertica_port,
+        local.vertica_db,
+        local.connection_username,
+        local.connection_password,
+      ),
+      "",
+      format(
+        "The database listens on TCP port %d and allows ingress from the configured CIDR blocks (defaults to 0.0.0.0/0).",
+        local.vertica_port,
+      ),
+    ],
+  )
 }
 
 output "additional_admin_username" {
