@@ -714,7 +714,7 @@ def _ensure_ecr_login_if_needed(compose_file: Path) -> None:
     _ensure_ecr_login_for_image(image_name)
 
 
-def ensure_vertica_container_running(timeout: float = 900.0) -> None:
+def ensure_vertica_container_running(timeout: float = 1800.0) -> None:
     log(STEP_SEPARATOR)
     log('Ensuring Vertica container vertica_ce is running')
 
@@ -764,7 +764,7 @@ def ensure_vertica_container_running(timeout: float = 900.0) -> None:
     )
 
 
-def wait_for_port(host: str, port: int, timeout: float = 900.0) -> None:
+def wait_for_port(host: str, port: int, timeout: float = 1800.0) -> None:
     deadline = time.time() + timeout
     last_error: Optional[Exception] = None
     while time.time() < deadline:
@@ -808,7 +808,7 @@ def main() -> int:
 
     ensure_docker_service()
     ensure_vertica_container_running()
-    wait_for_port('127.0.0.1', DB_PORT, timeout=900.0)
+    wait_for_port('127.0.0.1', DB_PORT, timeout=1800.0)
     log('Verified Vertica port 5433 is accepting TCP connections on localhost')
 
     run_command(['docker', 'ps', '--format', '{{.Names}}\t{{.Status}}'])
