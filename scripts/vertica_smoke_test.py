@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -29,6 +30,7 @@ if ADMIN_PASSWORD is None:
     raise SystemExit('Missing ADMIN_PASSWORD value')
 
 STEP_SEPARATOR = '=' * 72
+UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS = 300.0
 
 
 def log(message: str) -> None:
@@ -226,6 +228,26 @@ def _docker_inspect(container: str, template: str) -> Optional[str]:
     if value == '<no value>':
         return None
     return value or None
+
+
+def _container_uptime_seconds(container: str) -> Optional[float]:
+    """Return the container uptime in seconds, if available."""
+
+    started_at = _docker_inspect(container, '{{.State.StartedAt}}')
+    if not started_at:
+        return None
+
+    normalized = started_at.replace('Z', '+00:00')
+    try:
+        started_dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+    now = datetime.now(timezone.utc)
+    if started_dt.tzinfo is None:
+        started_dt = started_dt.replace(tzinfo=timezone.utc)
+
+    return max(0.0, (now - started_dt).total_seconds())
 
 
 def _docker_compose_plugin_available() -> bool:
@@ -787,6 +809,15 @@ def ensure_vertica_container_running(
             restart_attempts = 0
             recreate_attempts = 0
         elif health == 'unhealthy':
+            uptime = _container_uptime_seconds('vertica_ce')
+            if uptime is not None and uptime < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS:
+                log(
+                    'Vertica container health reported unhealthy but uptime '
+                    f'{uptime:.0f}s is within grace period; waiting for recovery'
+                )
+                time.sleep(10)
+                continue
+
             if restart_attempts < 3:
                 log('Vertica container health check reported unhealthy; restarting container')
                 run_command(['docker', 'restart', 'vertica_ce'])
