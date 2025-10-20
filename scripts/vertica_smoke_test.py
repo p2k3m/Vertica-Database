@@ -343,12 +343,39 @@ def _download_docker_compose_binary(version: str = 'v2.27.1') -> bool:
     return True
 
 
+def _compose_file() -> Optional[Path]:
+    """Return the compose file path if present on disk."""
+
+    candidates = [
+        Path('/opt/compose.remote.yml'),
+        Path('/opt/compose.remote.yaml'),
+        Path('/opt/compose.yml'),
+        Path('/opt/compose.yaml'),
+    ]
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    log(
+        'Unable to locate compose file. Checked: '
+        + ', '.join(str(candidate) for candidate in candidates)
+    )
+    return None
+
+
 def _compose_command() -> Optional[list[str]]:
+    compose_file = _compose_file()
     compose_commands: list[list[str]] = []
+
+    if compose_file is None:
+        return None
+
+    compose_file_arg = ['-f', str(compose_file)]
     if _docker_compose_plugin_available():
-        compose_commands.append(['docker', 'compose', '-f', '/opt/compose.remote.yml', 'up', '-d'])
+        compose_commands.append(['docker', 'compose', *compose_file_arg, 'up', '-d'])
     if shutil.which('docker-compose') is not None:
-        compose_commands.append(['docker-compose', '-f', '/opt/compose.remote.yml', 'up', '-d'])
+        compose_commands.append(['docker-compose', *compose_file_arg, 'up', '-d'])
 
     for command in compose_commands:
         return command
