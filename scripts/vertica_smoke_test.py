@@ -437,9 +437,33 @@ _ECR_PRIVATE_RE = re.compile(
 _ECR_PUBLIC_RE = re.compile(r'^(?P<registry>public\.ecr\.aws)(?P<path>/.+)$')
 _ECR_LOGIN_ATTEMPTS: set[str] = set()
 _URLLIB3_REPAIR_ATTEMPTED = False
+_PYTHON_SITE_PACKAGES_RE = re.compile(
+    r'File "(?P<path>/usr/(?:local/)?lib(?:64)?/python[0-9.]+/site-packages)/'
+)
 
 
-def _repair_missing_urllib3() -> bool:
+def _aws_cli_import_check() -> bool:
+    aws_executable = shutil.which('aws')
+    if not aws_executable:
+        return False
+
+    result = subprocess.run(
+        [aws_executable, '--version'],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode == 0:
+        return True
+
+    combined_output = ''.join((result.stdout or '', result.stderr or ''))
+    if combined_output.strip() and "ModuleNotFoundError: No module named 'urllib3'" not in combined_output:
+        log(combined_output.rstrip())
+
+    return "ModuleNotFoundError: No module named 'urllib3'" not in combined_output
+
+
+def _repair_missing_urllib3(failure_output: Optional[str] = None) -> bool:
     """Attempt to reinstall urllib3 when the AWS CLI import fails."""
 
     global _URLLIB3_REPAIR_ATTEMPTED
@@ -479,32 +503,57 @@ def _repair_missing_urllib3() -> bool:
     if pip_exe and (not install_commands or pip_exe not in {cmd[0] for cmd in install_commands}):
         install_commands.append([pip_exe])
 
+    target_paths: set[Path] = set()
+    if failure_output:
+        for match in _PYTHON_SITE_PACKAGES_RE.finditer(failure_output):
+            try:
+                target_paths.add(Path(match.group('path')))
+            except (OSError, ValueError):
+                continue
+
+    for path in list(target_paths):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            log(f'Unable to create target directory {path}: {exc}')
+            target_paths.discard(path)
+
     if not install_commands:
         log('Unable to repair missing urllib3 dependency because pip is unavailable')
         return False
 
     for base_command in install_commands:
-        for extra_args in ([], ['--break-system-packages']):
-            command = [*base_command, 'install', '--quiet', 'urllib3<2', *extra_args]
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                return True
+        variants: list[list[str]] = [[]]
+        variants.extend([['--target', str(path)] for path in target_paths])
 
-            needs_retry_with_break = (
-                not extra_args
-                and 'externally-managed-environment' in (result.stderr or '')
-            )
+        for variant in variants:
+            for allow_break in (False, True):
+                extra_args = [*variant]
+                if allow_break:
+                    extra_args.append('--break-system-packages')
 
-            if result.stdout:
-                log(result.stdout.rstrip())
-            if result.stderr:
-                log(f'[stderr] {result.stderr.rstrip()}')
+                command = [*base_command, 'install', '--quiet', 'urllib3<2', *extra_args]
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    if _aws_cli_import_check():
+                        return True
+                    continue
 
-            if not needs_retry_with_break:
+                if result.stdout:
+                    log(result.stdout.rstrip())
+                if result.stderr:
+                    log(f'[stderr] {result.stderr.rstrip()}')
+
+                if (
+                    not allow_break
+                    and 'externally-managed-environment' in (result.stderr or '')
+                ):
+                    continue
+
                 break
 
     package_manager_sequences: list[list[list[str]]] = []
@@ -542,7 +591,8 @@ def _repair_missing_urllib3() -> bool:
             if result.returncode != 0:
                 break
         else:
-            return True
+            if _aws_cli_import_check():
+                return True
 
     log('Failed to reinstall urllib3 dependency')
     return False
@@ -566,7 +616,7 @@ def _run_aws_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
             if (
                 needs_retry
                 and "ModuleNotFoundError: No module named 'urllib3'" in combined_output
-                and _repair_missing_urllib3()
+                and _repair_missing_urllib3(combined_output)
             ):
                 needs_retry = False
                 continue
