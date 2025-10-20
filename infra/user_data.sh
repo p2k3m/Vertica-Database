@@ -18,6 +18,17 @@ if [[ -z "$ACCOUNT_ID" || "$ACCOUNT_ID" == "null" ]]; then
   ACCOUNT_ID="${aws_account_id}"
 fi
 
+# Ensure the SSM agent knows which region to register in
+install -d -m 0755 /etc/amazon/ssm
+cat >/etc/amazon/ssm/amazon-ssm-agent.json <<EOF
+{
+  "Agent": {
+    "Region": "${REGION}"
+  }
+}
+EOF
+systemctl restart amazon-ssm-agent
+
 # Determine Vertica configuration for later reuse
 VERTICA_IMAGE="${vertica_image}"
 BOOTSTRAP_ADMIN_USER="${bootstrap_admin_username}"
