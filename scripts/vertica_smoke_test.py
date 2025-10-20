@@ -101,9 +101,64 @@ def _docker_info() -> subprocess.CompletedProcess[str]:
     )
 
 
+def _attempt_install_docker() -> bool:
+    """Try to install the Docker CLI using available package managers."""
+
+    install_sequences: list[list[list[str]]] = []
+
+    if shutil.which('amazon-linux-extras') and shutil.which('yum'):
+        install_sequences.append(
+            [
+                ['amazon-linux-extras', 'enable', 'docker'],
+                ['yum', 'install', '-y', 'docker'],
+            ]
+        )
+
+    if shutil.which('dnf'):
+        install_sequences.append([
+            ['dnf', 'install', '-y', 'docker'],
+        ])
+
+    if shutil.which('yum'):
+        install_sequences.append([
+            ['yum', 'install', '-y', 'docker'],
+        ])
+
+    if shutil.which('apt-get'):
+        install_sequences.append(
+            [
+                ['apt-get', 'update'],
+                ['apt-get', 'install', '-y', 'docker.io'],
+            ]
+        )
+
+    if not install_sequences:
+        log('No supported package manager found to install Docker')
+        return False
+
+    for sequence in install_sequences:
+        commands_preview = ' && '.join(' '.join(part) for part in sequence)
+        log(STEP_SEPARATOR)
+        log(f'Attempting to install Docker using: {commands_preview}')
+        try:
+            for command in sequence:
+                run_command(command)
+        except SystemExit as exc:
+            log(f'Docker installation attempt failed: {exc}')
+            continue
+
+        if shutil.which('docker') is not None:
+            return True
+
+    return shutil.which('docker') is not None
+
+
 def ensure_docker_service() -> None:
     if shutil.which('docker') is None:
-        raise SystemExit('Docker CLI is not available on the instance')
+        log(STEP_SEPARATOR)
+        log('Docker CLI is not available on the instance; attempting installation')
+        if not _attempt_install_docker():
+            raise SystemExit('Docker CLI is not available on the instance and installation failed')
 
     info_result = _docker_info()
     if info_result.returncode == 0:
