@@ -5,7 +5,8 @@ import subprocess
 import sys
 import time
 import uuid
-from urllib.request import urlopen
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 from typing import Optional
 
 import vertica_python
@@ -42,10 +43,51 @@ def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
     return result
 
 
+_METADATA_TOKEN: Optional[str] = None
+
+
+def get_metadata_token(timeout: float = 2.0) -> Optional[str]:
+    """Return an IMDSv2 session token, or None if the token endpoint is unavailable."""
+
+    global _METADATA_TOKEN
+    if _METADATA_TOKEN is not None:
+        return _METADATA_TOKEN
+
+    request = Request(
+        'http://169.254.169.254/latest/api/token',
+        method='PUT',
+        headers={'X-aws-ec2-metadata-token-ttl-seconds': '21600'},
+        data=b'',
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            token = response.read().decode('utf-8').strip()
+    except HTTPError:
+        return None
+
+    _METADATA_TOKEN = token
+    return token
+
+
 def fetch_metadata(path: str, timeout: float = 2.0) -> str:
     url = f'http://169.254.169.254/latest/{path.lstrip("/")}'
-    with urlopen(url, timeout=timeout) as response:
-        return response.read().decode('utf-8').strip()
+
+    token = get_metadata_token(timeout)
+    headers = {'X-aws-ec2-metadata-token': token} if token else None
+
+    request = Request(url, headers=headers or {})
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.read().decode('utf-8').strip()
+    except HTTPError as exc:
+        if token and exc.code == 401:
+            # Token might have expired; refresh and retry once.
+            global _METADATA_TOKEN
+            _METADATA_TOKEN = None
+            return fetch_metadata(path, timeout)
+        raise
 
 
 def wait_for_port(host: str, port: int, timeout: float = 600.0) -> None:
