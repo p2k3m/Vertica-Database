@@ -125,15 +125,29 @@ jobs:
 
           echo "Instance registration detected: $ssm_entry"
 
-          cat >ssm-commands.json <<JSON
-          {
-            "commands": [
-              "set -euo pipefail",
-              "python3 -m pip install --quiet vertica-python",
-              "ADMIN_USER='$ADMIN_USER' ADMIN_PASSWORD='$ADMIN_PASSWORD' python3 <<'PY'\nimport json\nimport os\nimport socket\nimport subprocess\nimport sys\nimport time\nimport uuid\nfrom urllib.request import urlopen\nfrom typing import Optional\n\nimport vertica_python\n\nDB_NAME = 'VMart'\nDB_PORT = 5433\nDBADMIN_USER = 'dbadmin'\nDBADMIN_PASSWORD = ''\nADMIN_USER = os.environ['ADMIN_USER']\nADMIN_PASSWORD = os.environ['ADMIN_PASSWORD']\n\nif not ADMIN_USER:\n    raise SystemExit('Missing ADMIN_USER value')\nif ADMIN_PASSWORD is None:\n    raise SystemExit('Missing ADMIN_PASSWORD value')\n\nSTEP_SEPARATOR = '=' * 72\n\n\ndef log(message: str) -> None:\n    print(message, flush=True)\n\n\ndef run_command(command: list[str]) -> subprocess.CompletedProcess[str]:\n    log(STEP_SEPARATOR)\n    log(f'$ {" ".join(command)}')\n    result = subprocess.run(command, capture_output=True, text=True)\n    if result.stdout:\n        log(result.stdout.rstrip())\n    if result.stderr:\n        log(f'[stderr] {result.stderr.rstrip()}')\n    if result.returncode != 0:\n        raise SystemExit(f'Command {command!r} failed with exit code {result.returncode}')\n    return result\n\n\ndef fetch_metadata(path: str, timeout: float = 2.0) -> str:\n    url = f'http://169.254.169.254/latest/{path.lstrip("/")}'\n    with urlopen(url, timeout=timeout) as response:\n        return response.read().decode('utf-8').strip()\n\n\ndef wait_for_port(host: str, port: int, timeout: float = 600.0) -> None:\n    deadline = time.time() + timeout\n    last_error: Optional[Exception] = None\n    while time.time() < deadline:\n        try:\n            with socket.create_connection((host, port), timeout=5.0):\n                return\n        except OSError as exc:\n            last_error = exc\n            time.sleep(5)\n    raise SystemExit(f'Port {host}:{port} did not become reachable: {last_error}')\n\n\ndef connect_and_query(label: str, host: str, user: str, password: str) -> None:\n    log(STEP_SEPARATOR)\n    log(f'[{label}] Connecting to Vertica at {host}:{DB_PORT} as {user!r}')\n    config = {\n        'host': host,\n        'port': DB_PORT,\n        'user': user,\n        'password': password,\n        'database': DB_NAME,\n        'autocommit': True,\n    }\n    with vertica_python.connect(**config) as connection:\n        cursor = connection.cursor()\n        cursor.execute('SELECT 1')\n        value = cursor.fetchone()\n        if not value or value[0] != 1:\n            raise SystemExit(f'Unexpected response from SELECT 1 during {label}')\n        log(f'[{label}] SELECT 1 -> {value[0]}')\n\n\ndef main() -> int:\n    log('Beginning in-instance Vertica smoke test with detailed diagnostics')\n    hostname = socket.gethostname()\n    local_ipv4 = fetch_metadata('meta-data/local-ipv4')\n    public_ipv4 = fetch_metadata('meta-data/public-ipv4')\n    log(f'Instance hostname: {hostname}')\n    log(f'Instance local IPv4: {local_ipv4}')\n    log(f'Instance public IPv4: {public_ipv4}')\n\n    wait_for_port('127.0.0.1', DB_PORT, timeout=600.0)\n    log('Verified Vertica port 5433 is accepting TCP connections on localhost')\n\n    run_command(['docker', 'ps', '--format', '{{.Names}}\t{{.Status}}'])\n    image_result = run_command(['docker', 'inspect', '--format', '{{.Config.Image}}', 'vertica_ce'])\n    image_name = image_result.stdout.strip()\n    if image_name:\n        log(f'Vertica container image: {image_name}')\n        run_command(['docker', 'pull', image_name])\n    run_command(['docker', 'inspect', '--format', '{{json .NetworkSettings.Ports}}', 'vertica_ce'])\n\n    connect_and_query('dbadmin@localhost', '127.0.0.1', DBADMIN_USER, DBADMIN_PASSWORD)\n    connect_and_query('bootstrap_admin@localhost', '127.0.0.1', ADMIN_USER, ADMIN_PASSWORD)\n\n    try:\n        connect_and_query('dbadmin@public_ip', public_ipv4, DBADMIN_USER, DBADMIN_PASSWORD)\n    except Exception as exc:\n        log(f'[dbadmin@public_ip] Connection attempt failed: {exc}')\n        raise\n\n    smoke_user = f'smoke_{uuid.uuid4().hex[:8]}'\n    smoke_pass = uuid.uuid4().hex\n    log(STEP_SEPARATOR)\n    log(f'Creating smoke test user {smoke_user!r}')\n    smoke_user_created = False\n    with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True) as admin_conn:\n        admin_cursor = admin_conn.cursor()\n        admin_cursor.execute(f'CREATE USER "{smoke_user}" IDENTIFIED BY %s', [smoke_pass])\n        admin_cursor.execute(f'GRANT ALL PRIVILEGES ON DATABASE "{DB_NAME}" TO "{smoke_user}"')\n        admin_cursor.execute(f'GRANT USAGE ON SCHEMA PUBLIC TO "{smoke_user}"')\n        admin_cursor.execute(f'GRANT ALL PRIVILEGES ON SCHEMA PUBLIC TO "{smoke_user}"')\n        smoke_user_created = True\n\n    try:\n        connect_and_query('smoke_user@localhost', '127.0.0.1', smoke_user, smoke_pass)\n    finally:\n        if smoke_user_created:\n            log(STEP_SEPARATOR)\n            log(f'Dropping smoke test user {smoke_user!r}')\n            with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True) as admin_conn:\n                admin_conn.cursor().execute(f'DROP USER "{smoke_user}" CASCADE')\n\n    log(STEP_SEPARATOR)\n    log('All smoke test checks completed successfully')\n    log('SMOKE_TEST_SUCCESS')\n    return 0\n\n\nif __name__ == '__main__':\n    raise SystemExit(main())\nPY"
-            ]
-          }
-          JSON
+          python - <<'PY'
+import json
+import os
+import shlex
+from pathlib import Path
+
+script = Path("scripts/vertica_smoke_test.py").read_text().rstrip()
+admin_user = os.environ["ADMIN_USER"]
+admin_password = os.environ["ADMIN_PASSWORD"]
+
+env_parts = [
+    f"ADMIN_USER={shlex.quote(admin_user)}",
+    f"ADMIN_PASSWORD={shlex.quote(admin_password)}",
+]
+commands = [
+    "set -euo pipefail",
+    "python3 -m pip install --quiet vertica-python",
+    f"{' '.join(env_parts)} python3 <<'PY'\n{script}\nPY",
+]
+Path("ssm-commands.json").write_text(
+    json.dumps({"commands": commands}, indent=2)
+)
+PY
 
           command_id=$(aws ssm send-command \
             --document-name AWS-RunShellScript \
