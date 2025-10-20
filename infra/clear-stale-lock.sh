@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+: "${AWS_REGION:=${AWS_DEFAULT_REGION:-}}" || true
 : "${AWS_REGION:?set AWS_REGION}" || exit 1
 
 TABLE="tf-locks"
@@ -206,19 +207,70 @@ is_stale() {
   (( now_epoch - epoch >= STALE_AFTER_SECONDS ))
 }
 
+extract_paths() {
+  local item_json="$1"
+
+  jq -r '
+    def normalise:
+      if type == "object" then
+        if has("S") then .S
+        elif has("N") then .N
+        elif has("BOOL") then (if .BOOL then "true" else "false" end)
+        elif has("NULL") then empty
+        elif has("M") then (.M | with_entries(.value |= (.value | normalise)))
+        elif has("L") then (.L | map(normalise))
+        else with_entries(.value |= (.value | normalise))
+        end
+      else .
+      end;
+
+    def info_object:
+      if .Info.S? then
+        (.Info.S | fromjson? // {})
+      elif .Info.M? then
+        (.Info.M | with_entries(.value |= (.value | normalise)))
+      else
+        {}
+      end;
+
+    def collect_paths($info):
+      [
+        (.Path.S // empty),
+        (.path.S // empty),
+        (.LockID.S // empty),
+        ($info.Path // empty),
+        ($info.path // empty),
+        ($info.LockID // empty),
+        ($info.lock_id // empty),
+        ($info.StateFile // empty),
+        ($info.state_file // empty),
+        ($info.Key // empty),
+        ($info.key // empty),
+        ($info.ID // empty),
+        ($info.id // empty)
+      ] | map(select(. != ""));
+
+    (info_object) as $info |
+    collect_paths($info)
+    | unique
+    | .[]
+  ' <<<"$item_json" 2>/dev/null || true
+}
+
 clear_lock_item() {
   local item_json="$1"
+  local target_path="$2"
 
   local lock_id
   lock_id=$(jq -r '.LockID.S // empty' <<<"$item_json")
   if [[ -z "$lock_id" ]]; then
     log "Skipping lock with missing LockID"
-    return
+    return 1
   fi
 
   if [[ -n "${SEEN_LOCKS[$lock_id]:-}" ]]; then
     log "Lock ${lock_id} already processed; skipping"
-    return
+    return 0
   fi
 
   local parsed created operation
@@ -275,7 +327,29 @@ clear_lock_item() {
   local should_remove=1
   local reason=""
 
-  log "Evaluating lock ${lock_id}: created='${created}' operation='${operation}'"
+  local candidate_paths=()
+  while IFS= read -r candidate && [[ -n "$candidate" ]]; do
+    candidate_paths+=("$candidate")
+  done < <(extract_paths "$item_json")
+
+  if [[ ${#candidate_paths[@]} -eq 0 ]]; then
+    log "Evaluating lock ${lock_id}: no candidate path metadata found"
+  else
+    log "Evaluating lock ${lock_id}: paths='${candidate_paths[*]}' created='${created}' operation='${operation}'"
+  fi
+
+  local matches_target=0
+  for candidate_path in "${candidate_paths[@]}"; do
+    if [[ "$candidate_path" == "$target_path" ]] || [[ "$candidate_path" == *"/${target_path}" ]] || [[ "$target_path" == *"/${candidate_path}" ]]; then
+      matches_target=1
+      break
+    fi
+  done
+
+  if (( matches_target == 0 )); then
+    log "Leaving lock ${lock_id} untouched (paths do not reference ${target_path})"
+    return 1
+  fi
 
   if is_stale "$created"; then
     reason="stale for at least ${STALE_AFTER_SECONDS}s"
@@ -287,7 +361,7 @@ clear_lock_item() {
 
   if (( should_remove == 0 )); then
     log "Leaving lock ${lock_id} untouched (path does not appear stale): created='${created}' operation='${operation}'"
-    return
+    return 0
   fi
 
   SEEN_LOCKS[$lock_id]=1
@@ -307,22 +381,13 @@ clear_lock_item() {
   else
     log "Failed to delete lock ${lock_id}; AWS CLI output: ${delete_output}"
   fi
+
+  return 0
 }
 
 process_path() {
   local path="$1"
-  local matches
-  matches=$(jq -r --arg path "$path" '
-    .Items[]? |
-    (.Path.S // "") as $p |
-    select($p == $path or ($p | endswith($path))) |
-    @base64
-  ' <<<"$scan_output" 2>/dev/null || true)
-
-  if [[ -z "$matches" ]]; then
-    log "No locks found for path ${path}"
-    return
-  fi
+  local found=0
 
   while IFS= read -r encoded; do
     [[ -z "$encoded" ]] && continue
@@ -330,9 +395,15 @@ process_path() {
     item_json=$(echo "$encoded" | base64 --decode)
     local current_lock_id
     current_lock_id=$(jq -r '.LockID.S // "unknown"' <<<"$item_json")
-    log "Processing lock for path ${path}: ${current_lock_id}"
-    clear_lock_item "$item_json" || true
-  done <<<"$matches"
+    log "Processing lock candidate ${current_lock_id} for desired path ${path}"
+    if clear_lock_item "$item_json" "$path"; then
+      found=1
+    fi
+  done < <(jq -r '.Items[]? | @base64' <<<"$scan_output" 2>/dev/null || true)
+
+  if (( found == 0 )); then
+    log "No locks found for path ${path}"
+  fi
 }
 
 start_key=""
