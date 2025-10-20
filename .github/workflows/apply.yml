@@ -86,10 +86,14 @@ jobs:
           echo "ip=$(terraform output -raw public_ip)" >> $GITHUB_OUTPUT
           echo "dns=$(terraform output -raw public_dns)" >> $GITHUB_OUTPUT
           echo "instance_id=$(terraform output -raw instance_id)" >> $GITHUB_OUTPUT
+          echo "admin_user=$(terraform output -raw additional_admin_username)" >> $GITHUB_OUTPUT
+          echo "admin_pass=$(terraform output -raw additional_admin_password)" >> $GITHUB_OUTPUT
 
       - name: Smoke test via SSM
         env:
           INSTANCE_ID: "${{ steps.out.outputs.instance_id }}"
+          ADMIN_USER: "${{ steps.out.outputs.admin_user }}"
+          ADMIN_PASSWORD: "${{ steps.out.outputs.admin_pass }}"
         run: |
           set -euo pipefail
           echo "Waiting for instance $INSTANCE_ID to pass EC2 status checks..."
@@ -118,11 +122,11 @@ jobs:
             exit 1
           fi
 
-          cat >ssm-commands.json <<'JSON'
+          cat >ssm-commands.json <<JSON
           {
             "commands": [
               "python3 -m pip install --quiet vertica-python",
-              "python3 <<'PY'\nimport socket\nimport time\nimport vertica_python\n\nHOST = '127.0.0.1'\nPORT = 5433\nDEADLINE = time.time() + 600\nwhile time.time() < DEADLINE:\n    with socket.socket() as sock:\n        sock.settimeout(5)\n        try:\n            sock.connect((HOST, PORT))\n        except OSError:\n            time.sleep(5)\n        else:\n            break\nelse:\n    raise SystemExit('Vertica port never became reachable')\n\nfor attempt in range(12):\n    try:\n        with vertica_python.connect(host=HOST, port=PORT, user='dbadmin', password='', database='VMart') as conn:\n            cur = conn.cursor()\n            cur.execute('SELECT 1')\n            value = cur.fetchone()\n            if not value:\n                raise SystemExit('Empty response from SELECT 1')\n            print(value[0])\n            break\n    except Exception:\n        if attempt == 11:\n            raise\n        time.sleep(5)\nPY"
+              "ADMIN_USER='$ADMIN_USER' ADMIN_PASSWORD='$ADMIN_PASSWORD' python3 <<'PY'\nimport os\nimport socket\nimport time\nimport vertica_python\n\nHOST = '127.0.0.1'\nPORT = 5433\nDATABASE = 'VMart'\nADMIN_USER = os.environ['ADMIN_USER']\nADMIN_PASSWORD = os.environ['ADMIN_PASSWORD']\n\nif not ADMIN_USER:\n    raise SystemExit('Missing ADMIN_USER value')\nif not ADMIN_PASSWORD:\n    raise SystemExit('Missing ADMIN_PASSWORD value')\n\nDEADLINE = time.time() + 600\nwhile time.time() < DEADLINE:\n    with socket.socket() as sock:\n        sock.settimeout(5)\n        try:\n            sock.connect((HOST, PORT))\n        except OSError:\n            time.sleep(5)\n        else:\n            break\nelse:\n    raise SystemExit('Vertica port never became reachable')\n\nfor attempt in range(12):\n    try:\n        with vertica_python.connect(host=HOST, port=PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DATABASE) as conn:\n            cur = conn.cursor()\n            cur.execute('SELECT 1')\n            value = cur.fetchone()\n            if not value:\n                raise SystemExit('Empty response from SELECT 1')\n            print(value[0])\n            break\n    except Exception:\n        if attempt == 11:\n            raise\n        time.sleep(5)\nPY"
             ]
           }
           JSON
@@ -187,4 +191,5 @@ jobs:
         run: |
           echo "### Vertica is up" >> $GITHUB_STEP_SUMMARY
           echo "- Host: \`${{ steps.out.outputs.ip }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Port: \`5433\` User: \`dbadmin\` Password: \`(empty)\` DB: \`VMart\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Port: \`5433\` User: \`${{ steps.out.outputs.admin_user }}\` Password: \`${{ steps.out.outputs.admin_pass }}\` DB: \`VMart\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Bootstrap user \`dbadmin\` remains available with an empty password" >> $GITHUB_STEP_SUMMARY

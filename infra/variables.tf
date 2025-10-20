@@ -26,3 +26,16 @@ variable "vertica_image" {
   type    = string
   default = "vertica/vertica-ce:24.2.0-0"
 }
+
+variable "additional_admin_username" {
+  type        = string
+  default     = "appadmin"
+  description = "Username for the additional Vertica administrator account"
+}
+
+variable "additional_admin_password" {
+  type        = string
+  default     = ""
+  description = "Optional password for the additional Vertica administrator. Leave blank to auto-generate."
+  sensitive   = true
+}

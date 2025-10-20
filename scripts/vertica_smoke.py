@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import vertica_python
 
@@ -16,6 +18,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tests.wait_for_port import UNREACHABLE_ERRNOS, wait_for_port
+
+DEFAULT_TERRAFORM_DIR = REPO_ROOT / "infra"
 
 _DEFAULT_SENTINEL = object()
 
@@ -42,12 +46,72 @@ def _resolve_port() -> int:
     return int(_get_env_value("DB_PORT", "VERTICA_PORT", default="5433"))
 
 
+def _terraform_connection_details() -> Dict[str, str]:
+    terraform_dir = Path(os.getenv("TERRAFORM_DIR", DEFAULT_TERRAFORM_DIR))
+    if not terraform_dir.exists():
+        return {}
+
+    command = [
+        "terraform",
+        "-chdir",
+        str(terraform_dir),
+        "output",
+        "-json",
+        "connection_details",
+    ]
+
+    try:
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return {}
+
+    try:
+        parsed = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {}
+
+    if isinstance(parsed, dict):
+        value = parsed.get("value", parsed)
+        if isinstance(value, dict):
+            return {k: str(v) for k, v in value.items() if v is not None}
+    return {}
+
+
+def _resolve_credentials() -> Dict[str, str]:
+    details = _terraform_connection_details()
+
+    username = _get_env_value(
+        "DB_USER",
+        "VERTICA_USER",
+        default=details.get(
+            "username",
+            details.get("additional_admin_username", details.get("bootstrap_admin_username", "")),
+        ),
+    )
+    password = _get_env_value(
+        "DB_PASSWORD",
+        "VERTICA_PASSWORD",
+        default=details.get(
+            "password",
+            details.get("additional_admin_password", details.get("bootstrap_admin_password", "")),
+        ),
+    )
+
+    return {"user": username, "password": password}
+
+
 def _connect_and_query(host: str, port: int) -> None:
+    credentials = _resolve_credentials()
     config = {
         "host": host,
         "port": port,
-        "user": "dbadmin",
-        "password": "",
+        "user": credentials["user"] or "appadmin",
+        "password": credentials["password"],
         "database": "VMart",
     }
 
