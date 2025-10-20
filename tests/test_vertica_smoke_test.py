@@ -68,3 +68,15 @@ def test_container_uptime_seconds_returns_none_for_invalid(monkeypatch):
     monkeypatch.setattr(smoke, '_docker_inspect', lambda container, template: 'invalid')
 
     assert smoke._container_uptime_seconds('vertica_ce') is None
+
+
+def test_container_uptime_seconds_handles_zero_timestamp(monkeypatch):
+    reference_now = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    _set_fixed_now(monkeypatch, reference_now)
+    monkeypatch.setattr(
+        smoke,
+        '_docker_inspect',
+        lambda container, template: '0001-01-01T00:00:00Z',
+    )
+
+    assert smoke._container_uptime_seconds('vertica_ce') == 0.0
