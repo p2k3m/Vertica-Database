@@ -22,6 +22,12 @@ variable "use_spot" {
   default = true
 }
 
+variable "ami_ssm_parameter_name" {
+  type        = string
+  description = "SSM public parameter that resolves to the base AMI ID used for the Vertica host"
+  default     = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+}
+
 variable "vertica_image" {
   type        = string
   description = "Docker image for the Vertica deployment"

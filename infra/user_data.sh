@@ -3,6 +3,7 @@ set -euo pipefail
 exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 
 # Install Docker and helpers
+echo "[user-data] Installing OS dependencies and SSM agent"
 amazon-linux-extras enable docker || true
 if command -v dnf >/dev/null 2>&1; then
   PKG_MGR=dnf
@@ -14,6 +15,7 @@ fi
 systemctl enable --now docker
 
 # Configure the SSM agent before starting it so that registration succeeds reliably
+echo "[user-data] Configuring amazon-ssm-agent"
 systemctl enable amazon-ssm-agent || true
 systemctl stop amazon-ssm-agent || true
 
@@ -47,10 +49,12 @@ systemctl start amazon-ssm-agent
 
 # Some AL2023 images ship both the classic and snap-based units. Attempt to start the
 # snap service as well (ignore failures when it is not present).
+echo "[user-data] Ensuring snap-based amazon-ssm-agent service is running if present"
 systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
 systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
 
 # Wait for the agent to become active so that registration begins immediately.
+echo "[user-data] Waiting for amazon-ssm-agent to report active"
 deadline=$((SECONDS + 120))
 while [ $SECONDS -lt $deadline ]; do
   if systemctl is-active --quiet amazon-ssm-agent; then
@@ -60,6 +64,7 @@ while [ $SECONDS -lt $deadline ]; do
 done
 
 if ! systemctl is-active --quiet amazon-ssm-agent; then
+  echo "[user-data] amazon-ssm-agent failed to start" >&2
   systemctl status amazon-ssm-agent || true
   journalctl -u amazon-ssm-agent --no-pager -n 200 || true
   echo "amazon-ssm-agent failed to start" >&2

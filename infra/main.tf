@@ -44,14 +44,10 @@ data "aws_subnets" "default" {
   }
 }
 
-data "aws_ami" "al2023" {
-  most_recent = true
-  owners      = ["137112412989"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
+data "aws_ssm_parameter" "al2023" {
+  # Resolve the Amazon Linux 2023 AMI via the public SSM Parameter so we always
+  # receive an image with the Systems Manager agent baked in.
+  name = var.ami_ssm_parameter_name
 }
 
 resource "aws_security_group" "db_sg" {
@@ -163,7 +159,7 @@ resource "aws_iam_role_policy_attachment" "ssm_core" {
 }
 
 resource "aws_instance" "host" {
-  ami                         = data.aws_ami.al2023.id
+  ami                         = data.aws_ssm_parameter.al2023.value
   instance_type               = var.instance_type
   subnet_id                   = element(data.aws_subnets.default.ids, 0)
   vpc_security_group_ids      = [aws_security_group.db_sg.id]
