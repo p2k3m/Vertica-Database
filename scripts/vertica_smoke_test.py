@@ -951,7 +951,15 @@ def wait_for_port(host: str, port: int, timeout: float = 900.0) -> None:
     raise SystemExit(f'Port {host}:{port} did not become reachable: {last_error}')
 
 
-def connect_and_query(label: str, host: str, user: str, password: str) -> None:
+def connect_and_query(
+    label: str,
+    host: str,
+    user: str,
+    password: str,
+    *,
+    attempts: int = 12,
+    delay: float = 10.0,
+) -> None:
     log(STEP_SEPARATOR)
     log(f'[{label}] Connecting to Vertica at {host}:{DB_PORT} as {user!r}')
     config = {
@@ -962,13 +970,34 @@ def connect_and_query(label: str, host: str, user: str, password: str) -> None:
         'database': DB_NAME,
         'autocommit': True,
     }
-    with vertica_python.connect(**config) as connection:
-        cursor = connection.cursor()
-        cursor.execute('SELECT 1')
-        value = cursor.fetchone()
-        if not value or value[0] != 1:
-            raise SystemExit(f'Unexpected response from SELECT 1 during {label}')
-        log(f'[{label}] SELECT 1 -> {value[0]}')
+
+    last_error: Optional[BaseException] = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            with vertica_python.connect(**config) as connection:
+                cursor = connection.cursor()
+                cursor.execute('SELECT 1')
+                value = cursor.fetchone()
+                if not value or value[0] != 1:
+                    raise SystemExit(
+                        f'Unexpected response from SELECT 1 during {label}'
+                    )
+                log(f'[{label}] SELECT 1 -> {value[0]}')
+                return
+        except Exception as exc:  # pragma: no cover - runtime failure path
+            last_error = exc
+            if attempt >= attempts:
+                break
+
+            log(
+                f'[{label}] Connection attempt {attempt} failed with {exc!r}; '
+                f'retrying in {delay:.0f}s ({attempts - attempt} attempt(s) remaining)'
+            )
+            time.sleep(delay)
+
+    if last_error:
+        raise SystemExit(f'[{label}] Failed to connect to Vertica: {last_error}') from last_error
 
 
 def main() -> int:
