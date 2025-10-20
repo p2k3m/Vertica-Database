@@ -216,11 +216,29 @@ process_path() {
   done <<<"$matches"
 }
 
-scan_output=$(aws dynamodb scan --table-name "$TABLE" --output json 2>/dev/null || true)
-if [[ -z "$scan_output" ]] || [[ "$scan_output" == "{}" ]]; then
-  exit 0
-fi
+start_key=""
+while :; do
+  if [[ -n "$start_key" ]]; then
+    scan_output=$(aws dynamodb scan \
+      --table-name "$TABLE" \
+      --exclusive-start-key "$start_key" \
+      --output json 2>/dev/null || true)
+  else
+    scan_output=$(aws dynamodb scan \
+      --table-name "$TABLE" \
+      --output json 2>/dev/null || true)
+  fi
 
-for candidate_path in "${TARGET_PATHS[@]}"; do
-  process_path "$candidate_path"
+  if [[ -z "$scan_output" ]] || [[ "$scan_output" == "{}" ]]; then
+    break
+  fi
+
+  for candidate_path in "${TARGET_PATHS[@]}"; do
+    process_path "$candidate_path"
+  done
+
+  start_key=$(jq -c '.LastEvaluatedKey // empty' <<<"$scan_output" 2>/dev/null || true)
+  if [[ -z "$start_key" ]] || [[ "$start_key" == "null" ]]; then
+    break
+  fi
 done
