@@ -350,6 +350,53 @@ _COMPOSE_FILE_CANDIDATES = [
     Path('/opt/compose.yaml'),
 ]
 
+_USER_DATA_PATHS = [
+    Path('/var/lib/cloud/instance/user-data.txt'),
+    Path('/var/lib/cloud/data/user-data'),
+    *Path('/var/lib/cloud/instances').glob('*/user-data.txt'),
+]
+
+
+def _reconstruct_compose_file_from_user_data() -> Optional[Path]:
+    """Attempt to recreate the compose file from persisted user-data."""
+
+    marker = "cat >/opt/compose.remote.yml <<'YAML'"
+    terminator = "\nYAML"
+
+    for user_data_path in _USER_DATA_PATHS:
+        try:
+            if not user_data_path.is_file():
+                continue
+            content = user_data_path.read_text()
+        except Exception as exc:  # pragma: no cover - filesystem access failure path
+            log(f'Failed to read {user_data_path}: {exc}')
+            continue
+
+        start_index = content.find(marker)
+        if start_index == -1:
+            continue
+
+        compose_payload = content[start_index + len(marker) :]
+        end_index = compose_payload.find(terminator)
+        if end_index == -1:
+            continue
+
+        compose_payload = compose_payload[:end_index].lstrip('\n')
+        destination = Path('/opt/compose.remote.yml')
+
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(compose_payload + '\n')
+            destination.chmod(0o644)
+        except Exception as exc:  # pragma: no cover - filesystem failure path
+            log(f'Failed to write compose file to {destination}: {exc}')
+            return None
+
+        log(f'Reconstructed compose file at {destination} from {user_data_path}')
+        return destination
+
+    return None
+
 
 def _compose_file() -> Optional[Path]:
     """Return the compose file path if present on disk."""
@@ -357,6 +404,8 @@ def _compose_file() -> Optional[Path]:
     for candidate in _COMPOSE_FILE_CANDIDATES:
         if candidate.is_file():
             return candidate
+
+    return _reconstruct_compose_file_from_user_data()
 
     return None
 
