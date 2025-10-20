@@ -208,11 +208,56 @@ clear_lock_item() {
     return
   fi
 
-  local created
-  created=$(jq -r '(.Created.S // empty) // (.Info.S | fromjson? | .Created // empty)' <<<"$item_json" 2>/dev/null || true)
+  local parsed created operation
+  parsed=$(jq -r '
+    def normalise:
+      if type == "object" then
+        if has("S") then .S
+        elif has("N") then .N
+        elif has("BOOL") then (if .BOOL then "true" else "false" end)
+        elif has("NULL") then empty
+        elif has("M") then (.M | with_entries(.value |= (.value | normalise)))
+        elif has("L") then (.L | map(normalise))
+        else with_entries(.value |= (.value | normalise))
+        end
+      else .
+      end;
 
-  local operation
-  operation=$(jq -r '(.Operation.S // empty) // (.Info.S | fromjson? | .Operation // empty)' <<<"$item_json" 2>/dev/null || true)
+    def info_object:
+      if .Info.S? then
+        (.Info.S | fromjson? // {})
+      elif .Info.M? then
+        (.Info.M | with_entries(.value |= (.value | normalise)))
+      else
+        {}
+      end;
+
+    def pick_created($info):
+      [
+        (.Created.S // empty),
+        ($info.Created // empty),
+        ($info.created // empty),
+        ($info.CreatedAt // empty),
+        ($info.created_at // empty)
+      ]
+      | map(select(. != ""))
+      | first // empty;
+
+    def pick_operation($info):
+      [
+        (.Operation.S // empty),
+        ($info.Operation // empty),
+        ($info.operation // empty)
+      ]
+      | map(select(. != ""))
+      | first // empty;
+
+    (info_object) as $info |
+    [pick_created($info), pick_operation($info)]
+    | @tsv
+  ' <<<"$item_json" 2>/dev/null || true)
+
+  IFS=$'\t' read -r created operation <<<"${parsed:-$'\t'}"
 
   local should_remove=1
   local reason=""
