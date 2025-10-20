@@ -203,15 +203,6 @@ resource "aws_instance" "host" {
   }
 }
 
-resource "aws_cloudwatch_log_group" "ssm_smoke" {
-  name              = "/aws/ssm/${local.project}-smoke-test"
-  retention_in_days = 30
-
-  tags = {
-    Project = local.project
-  }
-}
-
 resource "aws_ssm_document" "vertica_smoke_test" {
   name          = "${local.project}-vertica-smoke-test"
   document_type = "Command"
@@ -239,11 +230,6 @@ resource "aws_ssm_association" "vertica_smoke_test" {
   targets {
     key    = "InstanceIds"
     values = [aws_instance.host.id]
-  }
-
-  output_location {
-    cloudwatch_log_group_name = aws_cloudwatch_log_group.ssm_smoke.name
-    cloudwatch_output_enabled = true
   }
 
   compliance_severity         = "HIGH"
