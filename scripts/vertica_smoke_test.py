@@ -412,23 +412,38 @@ def _compose_file() -> Optional[Path]:
     return None
 
 
-def _compose_command() -> Optional[tuple[list[str], Path]]:
-    compose_file = _compose_file()
-    compose_commands: list[list[str]] = []
+def _compose_up(compose_file: Path, *, force_recreate: bool = False) -> None:
+    """Run ``docker compose up`` (or ``docker-compose up``) for ``compose_file``."""
 
-    if compose_file is None:
-        return None
+    extra_args: list[str] = ['--force-recreate'] if force_recreate else []
+    commands: list[list[str]] = []
 
-    compose_file_arg = ['-f', str(compose_file)]
     if _docker_compose_plugin_available():
-        compose_commands.append(['docker', 'compose', *compose_file_arg, 'up', '-d'])
-    if shutil.which('docker-compose') is not None:
-        compose_commands.append(['docker-compose', *compose_file_arg, 'up', '-d'])
+        commands.append(
+            ['docker', 'compose', '-f', str(compose_file), 'up', '-d', *extra_args]
+        )
 
-    for command in compose_commands:
-        return command, compose_file
+    docker_compose_exe = shutil.which('docker-compose')
+    if docker_compose_exe is not None:
+        commands.append(
+            [docker_compose_exe, '-f', str(compose_file), 'up', '-d', *extra_args]
+        )
 
-    return None
+    if not commands:
+        raise SystemExit('Docker Compose CLI is not available to manage Vertica container')
+
+    last_error: Optional[BaseException] = None
+    for command in commands:
+        try:
+            run_command(command)
+        except SystemExit as exc:
+            last_error = exc
+            continue
+        else:
+            return
+
+    if last_error is not None:
+        raise last_error
 
 
 _ECR_PRIVATE_RE = re.compile(
@@ -723,8 +738,11 @@ def ensure_vertica_container_running(
     _ensure_docker_compose_cli()
     deadline = time.time() + timeout
     last_status: tuple[Optional[str], Optional[str]] = (None, None)
-    compose_command: Optional[tuple[list[str], Path]] = None
+    compose_file: Optional[Path] = None
     compose_missing_logged = False
+
+    restart_attempts = 0
+    recreate_attempts = 0
 
     compose_deadline = time.time() + compose_timeout
 
@@ -740,9 +758,9 @@ def ensure_vertica_container_running(
             log(f'Current Vertica container status: {status or "<absent>"}, health: {health or "<unknown>"}')
 
         if status is None:
-            if compose_command is None:
-                compose_command = _compose_command()
-            if compose_command is None:
+            if compose_file is None:
+                compose_file = _compose_file()
+            if compose_file is None:
                 if not compose_missing_logged:
                     compose_missing_logged = True
                     log(
@@ -760,11 +778,45 @@ def ensure_vertica_container_running(
             if compose_missing_logged:
                 log('Compose file detected; attempting to start vertica_ce via docker compose')
                 compose_missing_logged = False
-            command, compose_file = compose_command
             _ensure_ecr_login_if_needed(compose_file)
-            run_command(command)
+            _compose_up(compose_file)
+            restart_attempts = 0
+            recreate_attempts = 0
         elif status not in {'running', 'restarting'}:
             run_command(['docker', 'start', 'vertica_ce'])
+            restart_attempts = 0
+            recreate_attempts = 0
+        elif health == 'unhealthy':
+            if restart_attempts < 3:
+                log('Vertica container health check reported unhealthy; restarting container')
+                run_command(['docker', 'restart', 'vertica_ce'])
+                restart_attempts += 1
+                time.sleep(10)
+                continue
+
+            if compose_file is None:
+                compose_file = _compose_file()
+            if compose_file is not None and recreate_attempts < 2:
+                log('Vertica container remains unhealthy; recreating via docker compose')
+                _ensure_ecr_login_if_needed(compose_file)
+                _compose_up(compose_file, force_recreate=True)
+                recreate_attempts += 1
+                restart_attempts = 0
+                time.sleep(15)
+                continue
+
+            log('Vertica container is still unhealthy after recovery attempts; collecting diagnostics')
+            try:
+                run_command(['docker', 'ps', '--filter', 'name=vertica_ce'])
+            except SystemExit:
+                pass
+            try:
+                run_command(['docker', 'logs', '--tail', '200', 'vertica_ce'])
+            except SystemExit:
+                pass
+            raise SystemExit(
+                'Vertica container vertica_ce remained unhealthy after restart and recreate attempts'
+            )
 
         time.sleep(5)
 
