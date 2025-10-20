@@ -269,6 +269,13 @@ def _container_uptime_seconds(container: str) -> Optional[float]:
     if not normalized:
         return None
 
+    # Docker reports the zero ``StartedAt`` timestamp ("0001-01-01T00:00:00Z")
+    # while the container is still starting. Treat this as "no uptime" so the
+    # caller can continue waiting instead of interpreting it as an ancient
+    # start time and triggering premature recovery attempts.
+    if normalized.startswith('0001-01-01T00:00:00.000000'):
+        return 0.0
+
     try:
         started_dt = datetime.fromisoformat(normalized)
     except ValueError:
@@ -841,6 +848,13 @@ def ensure_vertica_container_running(
             recreate_attempts = 0
         elif health == 'unhealthy':
             uptime = _container_uptime_seconds('vertica_ce')
+            if uptime is None:
+                log(
+                    'Vertica container health reported unhealthy but uptime '
+                    'could not be determined; assuming the container is still starting'
+                )
+                time.sleep(10)
+                continue
             if uptime is not None and uptime < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS:
                 log(
                     'Vertica container health reported unhealthy but uptime '
