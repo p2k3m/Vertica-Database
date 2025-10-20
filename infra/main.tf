@@ -62,6 +62,17 @@ resource "aws_security_group" "db_sg" {
     }
   }
 
+  dynamic "ingress" {
+    for_each = var.allowed_cidrs
+    content {
+      description = "ICMP ping"
+      from_port   = -1
+      to_port     = -1
+      protocol    = "icmp"
+      cidr_blocks = [ingress.value]
+    }
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
