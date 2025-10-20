@@ -4,11 +4,17 @@ exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 
 # Install Docker and helpers
 amazon-linux-extras enable docker || true
-yum install -y amazon-ssm-agent docker docker-compose-plugin jq nmap-ncat python3 python3-pip
+if command -v dnf >/dev/null 2>&1; then
+  PKG_MGR=dnf
+else
+  PKG_MGR=yum
+fi
+
+"$PKG_MGR" install -y amazon-ssm-agent docker docker-compose-plugin jq nmap-ncat python3 python3-pip
 systemctl enable --now docker
 
 # Configure the SSM agent before starting it so that registration succeeds reliably
-systemctl enable amazon-ssm-agent
+systemctl enable amazon-ssm-agent || true
 systemctl stop amazon-ssm-agent || true
 
 # Discover region/account from metadata (prefer IMDSv2 but fall back to IMDSv1)
@@ -38,6 +44,27 @@ cat >/etc/amazon/ssm/amazon-ssm-agent.json <<EOF
 }
 EOF
 systemctl start amazon-ssm-agent
+
+# Some AL2023 images ship both the classic and snap-based units. Attempt to start the
+# snap service as well (ignore failures when it is not present).
+systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
+systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service 2>/dev/null || true
+
+# Wait for the agent to become active so that registration begins immediately.
+deadline=$((SECONDS + 120))
+while [ $SECONDS -lt $deadline ]; do
+  if systemctl is-active --quiet amazon-ssm-agent; then
+    break
+  fi
+  sleep 5
+done
+
+if ! systemctl is-active --quiet amazon-ssm-agent; then
+  systemctl status amazon-ssm-agent || true
+  journalctl -u amazon-ssm-agent --no-pager -n 200 || true
+  echo "amazon-ssm-agent failed to start" >&2
+  exit 1
+fi
 
 # Determine Vertica configuration for later reuse
 VERTICA_IMAGE="${vertica_image}"
