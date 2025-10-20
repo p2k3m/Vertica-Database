@@ -108,7 +108,7 @@ services:
       - VERTICA_DB_USER=${bootstrap_admin_username}
       - VERTICA_DB_PASSWORD=${bootstrap_admin_password}
     healthcheck:
-      test: ["CMD", "bash", "-lc", "nc -z localhost ${vertica_port}"]
+      test: ["CMD", "bash", "-lc", "exec 3<>/dev/tcp/localhost/${vertica_port}"]
       interval: 15s
       timeout: 3s
       retries: 20
