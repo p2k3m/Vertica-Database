@@ -803,6 +803,8 @@ def ensure_vertica_container_running(
 
     restart_attempts = 0
     recreate_attempts = 0
+    unhealthy_observed_at: Optional[float] = None
+    unhealthy_logged_duration: Optional[float] = None
 
     compose_deadline = time.time() + compose_timeout
 
@@ -810,12 +812,17 @@ def ensure_vertica_container_running(
         status = _docker_inspect('vertica_ce', '{{.State.Status}}')
         health = _docker_inspect('vertica_ce', '{{if .State.Health}}{{.State.Health.Status}}{{end}}')
         if status == 'running' and (not health or health == 'healthy'):
+            unhealthy_observed_at = None
+            unhealthy_logged_duration = None
             log(f'Vertica container status: {status}, health: {health or "unknown"}')
             return
 
         if (status, health) != last_status:
             last_status = (status, health)
             log(f'Current Vertica container status: {status or "<absent>"}, health: {health or "<unknown>"}')
+            if health != 'unhealthy':
+                unhealthy_observed_at = None
+                unhealthy_logged_duration = None
 
         if status is None:
             if compose_file is None:
@@ -846,7 +853,32 @@ def ensure_vertica_container_running(
             run_command(['docker', 'start', 'vertica_ce'])
             restart_attempts = 0
             recreate_attempts = 0
+            unhealthy_observed_at = None
+            unhealthy_logged_duration = None
         elif health == 'unhealthy':
+            now = time.time()
+            if unhealthy_observed_at is None:
+                unhealthy_observed_at = now
+
+            unhealthy_duration = now - unhealthy_observed_at
+            if (
+                unhealthy_duration
+                < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS
+            ):
+                if (
+                    unhealthy_logged_duration is None
+                    or unhealthy_duration - unhealthy_logged_duration >= 30
+                    or unhealthy_duration < unhealthy_logged_duration
+                ):
+                    log(
+                        'Vertica container health reported unhealthy but has '
+                        f'been unhealthy for {unhealthy_duration:.0f}s; '
+                        'waiting for recovery'
+                    )
+                    unhealthy_logged_duration = unhealthy_duration
+                time.sleep(10)
+                continue
+
             uptime = _container_uptime_seconds('vertica_ce')
             if uptime is None:
                 log(
@@ -860,6 +892,7 @@ def ensure_vertica_container_running(
                     'Vertica container health reported unhealthy but uptime '
                     f'{uptime:.0f}s is within grace period; waiting for recovery'
                 )
+                unhealthy_logged_duration = unhealthy_duration
                 time.sleep(10)
                 continue
 
@@ -868,6 +901,8 @@ def ensure_vertica_container_running(
                 run_command(['docker', 'restart', 'vertica_ce'])
                 restart_attempts += 1
                 time.sleep(10)
+                unhealthy_observed_at = None
+                unhealthy_logged_duration = None
                 continue
 
             if compose_file is None:
@@ -879,6 +914,8 @@ def ensure_vertica_container_running(
                 recreate_attempts += 1
                 restart_attempts = 0
                 time.sleep(15)
+                unhealthy_observed_at = None
+                unhealthy_logged_duration = None
                 continue
 
             log('Vertica container is still unhealthy after recovery attempts; collecting diagnostics')
