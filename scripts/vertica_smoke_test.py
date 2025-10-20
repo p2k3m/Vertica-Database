@@ -435,6 +435,72 @@ _ECR_PRIVATE_RE = re.compile(
 )
 _ECR_PUBLIC_RE = re.compile(r'^(?P<registry>public\.ecr\.aws)(?P<path>/.+)$')
 _ECR_LOGIN_ATTEMPTS: set[str] = set()
+_URLLIB3_REPAIR_ATTEMPTED = False
+
+
+def _repair_missing_urllib3() -> bool:
+    """Attempt to reinstall urllib3 when the AWS CLI import fails."""
+
+    global _URLLIB3_REPAIR_ATTEMPTED
+
+    if _URLLIB3_REPAIR_ATTEMPTED:
+        return False
+
+    _URLLIB3_REPAIR_ATTEMPTED = True
+
+    pip_executable = shutil.which('pip3') or shutil.which('pip')
+    if pip_executable is None:
+        log('Unable to repair missing urllib3 dependency because pip is unavailable')
+        return False
+
+    log(STEP_SEPARATOR)
+    log('Attempting to reinstall urllib3 for AWS CLI compatibility')
+
+    result = subprocess.run(
+        [pip_executable, 'install', '--quiet', 'urllib3<2'],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode == 0:
+        return True
+
+    if result.stdout:
+        log(result.stdout.rstrip())
+    if result.stderr:
+        log(f'[stderr] {result.stderr.rstrip()}')
+    log('Failed to reinstall urllib3 dependency')
+    return False
+
+
+def _run_aws_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run an AWS CLI command, attempting to repair missing urllib3 once."""
+
+    needs_retry = True
+
+    while True:
+        try:
+            return subprocess.run(
+                args,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            combined_output = ''.join((exc.stdout or '', exc.stderr or ''))
+            if (
+                needs_retry
+                and "ModuleNotFoundError: No module named 'urllib3'" in combined_output
+                and _repair_missing_urllib3()
+            ):
+                needs_retry = False
+                continue
+
+            if exc.stdout:
+                log(exc.stdout.rstrip())
+            if exc.stderr:
+                log(f'[stderr] {exc.stderr.rstrip()}')
+            raise
 
 
 def _extract_compose_image(compose_file: Path) -> Optional[str]:
@@ -479,33 +545,19 @@ def _ensure_ecr_login_for_image(image_name: str) -> None:
         log(STEP_SEPARATOR)
         log(f'Attempting ECR login for registry {registry} in region {region}')
         try:
-            password_result = subprocess.run(
-                ['aws', 'ecr', 'get-login-password', '--region', region],
-                check=True,
-                capture_output=True,
-                text=True,
+            password_result = _run_aws_cli(
+                ['aws', 'ecr', 'get-login-password', '--region', region]
             )
         except subprocess.CalledProcessError as exc:  # pragma: no cover - runtime failure path
-            if exc.stdout:
-                log(exc.stdout.rstrip())
-            if exc.stderr:
-                log(f'[stderr] {exc.stderr.rstrip()}')
             raise SystemExit('Failed to retrieve ECR login password') from exc
     else:
         log(STEP_SEPARATOR)
         log(f'Attempting ECR Public login for registry {registry}')
         try:
-            password_result = subprocess.run(
-                ['aws', 'ecr-public', 'get-login-password', '--region', region],
-                check=True,
-                capture_output=True,
-                text=True,
+            password_result = _run_aws_cli(
+                ['aws', 'ecr-public', 'get-login-password', '--region', region]
             )
         except subprocess.CalledProcessError as exc:  # pragma: no cover - runtime failure path
-            if exc.stdout:
-                log(exc.stdout.rstrip())
-            if exc.stderr:
-                log(f'[stderr] {exc.stderr.rstrip()}')
             raise SystemExit('Failed to retrieve ECR Public login password') from exc
 
     password = password_result.stdout.strip()
