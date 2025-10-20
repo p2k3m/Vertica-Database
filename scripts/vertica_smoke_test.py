@@ -507,6 +507,43 @@ def _repair_missing_urllib3() -> bool:
             if not needs_retry_with_break:
                 break
 
+    package_manager_sequences: list[list[list[str]]] = []
+
+    if shutil.which('dnf'):
+        package_manager_sequences.append([
+            ['dnf', 'install', '-y', 'python3-urllib3'],
+        ])
+
+    if shutil.which('yum'):
+        package_manager_sequences.append([
+            ['yum', 'install', '-y', 'python3-urllib3'],
+        ])
+
+    if shutil.which('apt-get'):
+        package_manager_sequences.append([
+            ['apt-get', 'update'],
+            ['apt-get', 'install', '-y', 'python3-urllib3'],
+        ])
+
+    for sequence in package_manager_sequences:
+        commands_preview = ' && '.join(' '.join(part) for part in sequence)
+        log(STEP_SEPARATOR)
+        log('Attempting to install urllib3 using: ' + commands_preview)
+        for command in sequence:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+            )
+            if result.stdout:
+                log(result.stdout.rstrip())
+            if result.stderr:
+                log(f'[stderr] {result.stderr.rstrip()}')
+            if result.returncode != 0:
+                break
+        else:
+            return True
+
     log('Failed to reinstall urllib3 dependency')
     return False
 
