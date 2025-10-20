@@ -5,8 +5,12 @@ set -euo pipefail
 # Terraform prompts for unset variables by default which causes this helper script
 # to hang in non-interactive environments (for example GitHub Actions) while it
 # waits for values such as `var.aws_account_id`.  Explicitly disable interactive
-# input and make sure every Terraform invocation honours the flag.
-tf(){ terraform -input=false "$@"; }
+# input for all Terraform commands via the TF_INPUT environment variable.  This
+# works for every Terraform subcommand (including `import`, which does not accept
+# an `-input` flag) without relying on per-command CLI flags.
+export TF_INPUT=0
+
+tf(){ terraform "$@"; }
 
 get_json(){ aws "$@" --output json; }
 exists_in_state(){ tf state list | grep -q "$1"; }
