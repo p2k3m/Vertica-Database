@@ -6,11 +6,21 @@ exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 amazon-linux-extras enable docker || true
 yum install -y amazon-ssm-agent docker docker-compose-plugin jq nmap-ncat python3 python3-pip
 systemctl enable --now docker
-systemctl enable --now amazon-ssm-agent
 
-# Discover region/account from metadata
-REGION=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)
-ACCOUNT_ID=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .accountId)
+# Configure the SSM agent before starting it so that registration succeeds reliably
+systemctl enable amazon-ssm-agent
+systemctl stop amazon-ssm-agent || true
+
+# Discover region/account from metadata (prefer IMDSv2 but fall back to IMDSv1)
+IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" || true)
+imds_header=()
+if [ -n "$IMDS_TOKEN" ]; then
+  imds_header=(-H "X-aws-ec2-metadata-token: $IMDS_TOKEN")
+fi
+
+metadata_document=$(curl -s "${imds_header[@]}" http://169.254.169.254/latest/dynamic/instance-identity/document || true)
+REGION=$(echo "$metadata_document" | jq -r .region 2>/dev/null || true)
+ACCOUNT_ID=$(echo "$metadata_document" | jq -r .accountId 2>/dev/null || true)
 if [[ -z "$REGION" || "$REGION" == "null" ]]; then
   REGION="${aws_region}"
 fi
@@ -27,7 +37,7 @@ cat >/etc/amazon/ssm/amazon-ssm-agent.json <<EOF
   }
 }
 EOF
-systemctl restart amazon-ssm-agent
+systemctl start amazon-ssm-agent
 
 # Determine Vertica configuration for later reuse
 VERTICA_IMAGE="${vertica_image}"
@@ -74,6 +84,12 @@ YAML
 
 mkdir -p /var/lib/vertica
 chmod 700 /var/lib/vertica
+
+# Ensure the Vertica image is available locally before starting the service
+if ! docker pull "$VERTICA_IMAGE"; then
+  echo "Failed to pull Vertica image $VERTICA_IMAGE" >&2
+  exit 1
+fi
 
 # Start Vertica only
 curl -fsSL https://get.docker.com | sh || true
