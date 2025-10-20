@@ -18,7 +18,7 @@ if [ -n "$IMDS_TOKEN" ]; then
   imds_header=(-H "X-aws-ec2-metadata-token: $IMDS_TOKEN")
 fi
 
-metadata_document=$(curl -s "${imds_header[@]}" http://169.254.169.254/latest/dynamic/instance-identity/document || true)
+metadata_document=$(curl -s "$${imds_header[@]}" http://169.254.169.254/latest/dynamic/instance-identity/document || true)
 REGION=$(echo "$metadata_document" | jq -r .region 2>/dev/null || true)
 ACCOUNT_ID=$(echo "$metadata_document" | jq -r .accountId 2>/dev/null || true)
 if [[ -z "$REGION" || "$REGION" == "null" ]]; then
