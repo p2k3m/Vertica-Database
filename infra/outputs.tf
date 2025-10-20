@@ -40,6 +40,8 @@ output "connection_details" {
     bootstrap_admin_password  = local.bootstrap_admin_pass
     additional_admin_username = local.additional_admin_user
     additional_admin_password = local.connection_password
+    smoke_test_username       = local.smoke_test_user
+    smoke_test_password       = local.smoke_test_pass == "" ? "" : nonsensitive(local.smoke_test_pass)
   }
   sensitive = true
 }
@@ -85,4 +87,25 @@ output "additional_admin_password" {
   description = "Password for the additional Vertica administrator"
   value       = local.additional_admin_pass
   sensitive   = true
+}
+
+output "smoke_test_username" {
+  description = "Username created during the SSM smoke test"
+  value       = local.smoke_test_user
+}
+
+output "smoke_test_password" {
+  description = "Password used during the SSM smoke test"
+  value       = local.smoke_test_pass
+  sensitive   = true
+}
+
+output "ssm_smoke_test_document" {
+  description = "Name of the SSM document that performs the Vertica smoke test"
+  value       = aws_ssm_document.vertica_smoke_test.name
+}
+
+output "ssm_smoke_test_log_group" {
+  description = "CloudWatch log group capturing smoke test output"
+  value       = aws_cloudwatch_log_group.ssm_smoke.name
 }

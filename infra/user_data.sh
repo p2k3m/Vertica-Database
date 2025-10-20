@@ -10,7 +10,7 @@ else
   PKG_MGR=yum
 fi
 
-"$PKG_MGR" install -y amazon-ssm-agent docker docker-compose-plugin jq nmap-ncat python3 python3-pip
+"$PKG_MGR" install -y amazon-ssm-agent awscli docker docker-compose-plugin jq nmap-ncat python3 python3-pip
 systemctl enable --now docker
 
 # Configure the SSM agent before starting it so that registration succeeds reliably

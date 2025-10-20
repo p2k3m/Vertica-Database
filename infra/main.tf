@@ -25,6 +25,14 @@ resource "random_password" "additional_admin" {
   min_numeric = 2
 }
 
+resource "random_password" "smoke_test" {
+  length      = 20
+  special     = false
+  min_lower   = 2
+  min_upper   = 2
+  min_numeric = 2
+}
+
 data "aws_vpc" "default" {
   default = true
 }
@@ -135,6 +143,7 @@ resource "aws_iam_role_policy" "ecr_ssm_logs" {
         Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
+          "logs:DescribeLogStreams",
           "logs:PutLogEvents"
         ]
         Resource = "*"
@@ -146,6 +155,11 @@ resource "aws_iam_role_policy" "ecr_ssm_logs" {
 resource "aws_iam_instance_profile" "ec2_profile" {
   name = local.profile_name
   role = aws_iam_role.ec2_role.name
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_core" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
 resource "aws_instance" "host" {
@@ -187,4 +201,55 @@ resource "aws_instance" "host" {
     Project = local.project
     Role    = "db"
   }
+}
+
+resource "aws_cloudwatch_log_group" "ssm_smoke" {
+  name              = "/aws/ssm/${local.project}-smoke-test"
+  retention_in_days = 30
+
+  tags = {
+    Project = local.project
+  }
+}
+
+resource "aws_ssm_document" "vertica_smoke_test" {
+  name          = "${local.project}-vertica-smoke-test"
+  document_type = "Command"
+  target_type   = "/AWS::EC2::Instance"
+  content = templatefile("${path.module}/ssm-smoke-test.json.tpl", {
+    vertica_image                = var.vertica_image
+    vertica_port                 = tostring(local.vertica_port)
+    bootstrap_admin_username     = local.bootstrap_admin_user
+    bootstrap_admin_password     = local.bootstrap_admin_pass
+    additional_admin_username    = local.additional_admin_user
+    additional_admin_password    = local.additional_admin_pass
+    smoke_test_username          = local.smoke_test_user
+    smoke_test_password          = local.smoke_test_pass
+    vertica_db_name              = local.vertica_db
+  })
+
+  tags = {
+    Project = local.project
+  }
+}
+
+resource "aws_ssm_association" "vertica_smoke_test" {
+  name = aws_ssm_document.vertica_smoke_test.name
+
+  targets {
+    key    = "InstanceIds"
+    values = [aws_instance.host.id]
+  }
+
+  output_location {
+    cloudwatch_log_group_name = aws_cloudwatch_log_group.ssm_smoke.name
+    cloudwatch_output_enabled = true
+  }
+
+  compliance_severity         = "HIGH"
+  max_concurrency             = "1"
+  max_errors                  = "1"
+  apply_only_at_cron_interval = false
+
+  depends_on = [aws_instance.host]
 }
