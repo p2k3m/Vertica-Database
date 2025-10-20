@@ -714,7 +714,9 @@ def _ensure_ecr_login_if_needed(compose_file: Path) -> None:
     _ensure_ecr_login_for_image(image_name)
 
 
-def ensure_vertica_container_running(timeout: float = 1800.0) -> None:
+def ensure_vertica_container_running(
+    timeout: float = 900.0, compose_timeout: float = 300.0
+) -> None:
     log(STEP_SEPARATOR)
     log('Ensuring Vertica container vertica_ce is running')
 
@@ -723,6 +725,8 @@ def ensure_vertica_container_running(timeout: float = 1800.0) -> None:
     last_status: tuple[Optional[str], Optional[str]] = (None, None)
     compose_command: Optional[tuple[list[str], Path]] = None
     compose_missing_logged = False
+
+    compose_deadline = time.time() + compose_timeout
 
     while time.time() < deadline:
         status = _docker_inspect('vertica_ce', '{{.State.Status}}')
@@ -745,6 +749,11 @@ def ensure_vertica_container_running(timeout: float = 1800.0) -> None:
                         'Compose file not yet available; checked: '
                         + ', '.join(str(candidate) for candidate in _COMPOSE_FILE_CANDIDATES)
                     )
+                if time.time() >= compose_deadline:
+                    raise SystemExit(
+                        'Compose file was not detected within the allotted '
+                        f'{compose_timeout:.0f} seconds; aborting'
+                    )
                 time.sleep(5)
                 continue
 
@@ -764,7 +773,7 @@ def ensure_vertica_container_running(timeout: float = 1800.0) -> None:
     )
 
 
-def wait_for_port(host: str, port: int, timeout: float = 1800.0) -> None:
+def wait_for_port(host: str, port: int, timeout: float = 900.0) -> None:
     deadline = time.time() + timeout
     last_error: Optional[Exception] = None
     while time.time() < deadline:
@@ -808,7 +817,7 @@ def main() -> int:
 
     ensure_docker_service()
     ensure_vertica_container_running()
-    wait_for_port('127.0.0.1', DB_PORT, timeout=1800.0)
+    wait_for_port('127.0.0.1', DB_PORT)
     log('Verified Vertica port 5433 is accepting TCP connections on localhost')
 
     run_command(['docker', 'ps', '--format', '{{.Names}}\t{{.Status}}'])
