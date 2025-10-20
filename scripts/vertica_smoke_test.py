@@ -1,6 +1,7 @@
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -410,7 +411,7 @@ def _compose_file() -> Optional[Path]:
     return None
 
 
-def _compose_command() -> Optional[list[str]]:
+def _compose_command() -> Optional[tuple[list[str], Path]]:
     compose_file = _compose_file()
     compose_commands: list[list[str]] = []
 
@@ -424,9 +425,116 @@ def _compose_command() -> Optional[list[str]]:
         compose_commands.append(['docker-compose', *compose_file_arg, 'up', '-d'])
 
     for command in compose_commands:
-        return command
+        return command, compose_file
 
     return None
+
+
+_ECR_PRIVATE_RE = re.compile(
+    r'^(?P<registry>[0-9]+\.dkr\.ecr\.(?P<region>[a-z0-9-]+)\.amazonaws\.com)(?P<path>/.+)$'
+)
+_ECR_PUBLIC_RE = re.compile(r'^(?P<registry>public\.ecr\.aws)(?P<path>/.+)$')
+_ECR_LOGIN_ATTEMPTS: set[str] = set()
+
+
+def _extract_compose_image(compose_file: Path) -> Optional[str]:
+    try:
+        for line in compose_file.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith('image:'):
+                return stripped.split(':', 1)[1].strip()
+    except Exception as exc:  # pragma: no cover - filesystem failure path
+        log(f'Failed to read compose file {compose_file}: {exc}')
+    return None
+
+
+def _ensure_ecr_login_for_image(image_name: str) -> None:
+    match = _ECR_PRIVATE_RE.match(image_name)
+    registry: Optional[str]
+    region: Optional[str]
+
+    if match:
+        registry = match.group('registry')
+        region = match.group('region')
+    else:
+        match_public = _ECR_PUBLIC_RE.match(image_name)
+        if not match_public:
+            return
+        registry = match_public.group('registry')
+        region = 'us-east-1'
+
+    if registry in _ECR_LOGIN_ATTEMPTS:
+        return
+
+    _ECR_LOGIN_ATTEMPTS.add(registry)
+
+    if shutil.which('aws') is None:
+        log(
+            'AWS CLI is not available on the instance; unable to perform docker login for '
+            f'{registry}'
+        )
+        return
+
+    if match:
+        log(STEP_SEPARATOR)
+        log(f'Attempting ECR login for registry {registry} in region {region}')
+        try:
+            password_result = subprocess.run(
+                ['aws', 'ecr', 'get-login-password', '--region', region],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - runtime failure path
+            if exc.stdout:
+                log(exc.stdout.rstrip())
+            if exc.stderr:
+                log(f'[stderr] {exc.stderr.rstrip()}')
+            raise SystemExit('Failed to retrieve ECR login password') from exc
+    else:
+        log(STEP_SEPARATOR)
+        log(f'Attempting ECR Public login for registry {registry}')
+        try:
+            password_result = subprocess.run(
+                ['aws', 'ecr-public', 'get-login-password', '--region', region],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:  # pragma: no cover - runtime failure path
+            if exc.stdout:
+                log(exc.stdout.rstrip())
+            if exc.stderr:
+                log(f'[stderr] {exc.stderr.rstrip()}')
+            raise SystemExit('Failed to retrieve ECR Public login password') from exc
+
+    password = password_result.stdout.strip()
+    if not password:
+        log('ECR login password command returned empty output; skipping docker login')
+        return
+
+    log(STEP_SEPARATOR)
+    log(f'Logging in to Docker registry {registry}')
+    login_result = subprocess.run(
+        ['docker', 'login', '--username', 'AWS', '--password-stdin', registry],
+        input=password,
+        capture_output=True,
+        text=True,
+    )
+    if login_result.stdout:
+        log(login_result.stdout.rstrip())
+    if login_result.stderr:
+        log(f'[stderr] {login_result.stderr.rstrip()}')
+    if login_result.returncode != 0:
+        raise SystemExit(f'Docker login for {registry} failed with exit code {login_result.returncode}')
+
+
+def _ensure_ecr_login_if_needed(compose_file: Path) -> None:
+    image_name = _extract_compose_image(compose_file)
+    if not image_name:
+        return
+
+    _ensure_ecr_login_for_image(image_name)
 
 
 def ensure_vertica_container_running(timeout: float = 900.0) -> None:
@@ -436,7 +544,7 @@ def ensure_vertica_container_running(timeout: float = 900.0) -> None:
     _ensure_docker_compose_cli()
     deadline = time.time() + timeout
     last_status: tuple[Optional[str], Optional[str]] = (None, None)
-    compose_command: Optional[list[str]] = None
+    compose_command: Optional[tuple[list[str], Path]] = None
     compose_missing_logged = False
 
     while time.time() < deadline:
@@ -466,7 +574,9 @@ def ensure_vertica_container_running(timeout: float = 900.0) -> None:
             if compose_missing_logged:
                 log('Compose file detected; attempting to start vertica_ce via docker compose')
                 compose_missing_logged = False
-            run_command(compose_command)
+            command, compose_file = compose_command
+            _ensure_ecr_login_if_needed(compose_file)
+            run_command(command)
         elif status not in {'running', 'restarting'}:
             run_command(['docker', 'start', 'vertica_ce'])
 
@@ -529,6 +639,7 @@ def main() -> int:
     image_name = image_result.stdout.strip()
     if image_name:
         log(f'Vertica container image: {image_name}')
+        _ensure_ecr_login_for_image(image_name)
         run_command(['docker', 'pull', image_name])
     run_command(['docker', 'inspect', '--format', '{{json .NetworkSettings.Ports}}', 'vertica_ce'])
 
