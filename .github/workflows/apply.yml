@@ -94,7 +94,7 @@ jobs:
           INSTANCE_ID: "${{ steps.out.outputs.instance_id }}"
           ADMIN_USER: "${{ steps.out.outputs.admin_user }}"
           ADMIN_PASSWORD: "${{ steps.out.outputs.admin_pass }}"
-        run: |10
+        run: |
           set -euo pipefail
           echo "Waiting for instance $INSTANCE_ID to pass EC2 status checks..."
           if ! aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"; then
