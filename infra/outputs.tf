@@ -41,6 +41,7 @@ output "connection_details" {
     additional_admin_username = local.additional_admin_user
     additional_admin_password = local.connection_password
   }
+  sensitive = true
 }
 
 output "connection_instructions" {
@@ -72,6 +73,7 @@ output "connection_instructions" {
       ),
     ],
   )
+  sensitive = true
 }
 
 output "additional_admin_username" {
