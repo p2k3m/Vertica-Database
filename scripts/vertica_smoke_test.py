@@ -230,6 +230,34 @@ def _docker_inspect(container: str, template: str) -> Optional[str]:
     return value or None
 
 
+_DOCKER_TIMESTAMP_PATTERN = re.compile(
+    r'^(?P<base>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})'
+    r'(?:\.(?P<fraction>\d+))?'
+    r'(?P<tz>Z|[+-]\d{2}:\d{2})?$'
+)
+
+
+def _normalize_docker_timestamp(value: str) -> Optional[str]:
+    """Normalize Docker timestamps so they can be parsed by :func:`datetime.fromisoformat`."""
+
+    match = _DOCKER_TIMESTAMP_PATTERN.match(value.strip())
+    if not match:
+        return None
+
+    base = match.group('base')
+    fraction = match.group('fraction') or '0'
+    tz = match.group('tz')
+
+    # ``datetime.fromisoformat`` supports up to microseconds precision. Docker returns
+    # nanosecond precision, so we truncate or pad the fractional portion accordingly.
+    fraction = (fraction + '000000')[:6]
+
+    if not tz or tz == 'Z':
+        tz = '+00:00'
+
+    return f'{base}.{fraction}{tz}'
+
+
 def _container_uptime_seconds(container: str) -> Optional[float]:
     """Return the container uptime in seconds, if available."""
 
@@ -237,7 +265,10 @@ def _container_uptime_seconds(container: str) -> Optional[float]:
     if not started_at:
         return None
 
-    normalized = started_at.replace('Z', '+00:00')
+    normalized = _normalize_docker_timestamp(started_at)
+    if not normalized:
+        return None
+
     try:
         started_dt = datetime.fromisoformat(normalized)
     except ValueError:
