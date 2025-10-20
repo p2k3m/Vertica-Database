@@ -1,6 +1,7 @@
 import importlib
 import os
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import pytest
 
@@ -80,3 +81,40 @@ def test_container_uptime_seconds_handles_zero_timestamp(monkeypatch):
     )
 
     assert smoke._container_uptime_seconds('vertica_ce') == 0.0
+
+
+def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    def fake_sleep(seconds: float) -> None:
+        current_time['value'] += seconds
+
+    calls: list[list[str]] = []
+
+    def fake_run_command(command: list[str]):  # pragma: no cover - should not run
+        calls.append(command)
+        raise AssertionError('run_command should not be invoked during grace period')
+
+    health_states = iter(['unhealthy', 'healthy'])
+
+    def fake_docker_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return next(health_states)
+        raise AssertionError(f'Unexpected template: {template}')
+
+    monkeypatch.setattr(smoke, '_ensure_docker_compose_cli', lambda: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 600.0)
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_docker_inspect)
+    monkeypatch.setattr(smoke, 'run_command', fake_run_command)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', fake_sleep)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+
+    smoke.ensure_vertica_container_running(timeout=30.0, compose_timeout=0.0)
+
+    assert not calls
