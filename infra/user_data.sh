@@ -107,11 +107,6 @@ services:
       - VERTICA_DB_NAME=${vertica_db_name}
       - VERTICA_DB_USER=${bootstrap_admin_username}
       - VERTICA_DB_PASSWORD=${bootstrap_admin_password}
-    healthcheck:
-      test: ["CMD", "bash", "-lc", "exec 3<>/dev/tcp/localhost/${vertica_port}"]
-      interval: 15s
-      timeout: 3s
-      retries: 20
 YAML
 
 mkdir -p /var/lib/vertica
@@ -132,20 +127,20 @@ fi
 
 (docker compose -f /opt/compose.remote.yml up -d) || (docker-compose -f /opt/compose.remote.yml up -d)
 
-# Wait for Vertica container health/port
+# Wait for the Vertica container to accept connections on the database port
 deadline=$((SECONDS + 1800))
 ready=0
 while [ $SECONDS -lt $deadline ]; do
   if docker inspect vertica_ce >/dev/null 2>&1; then
-    status=$(docker inspect --format '{{.State.Health.Status}}' vertica_ce 2>/dev/null || echo "unknown")
+    status=$(docker inspect --format '{{.State.Status}}' vertica_ce 2>/dev/null || echo "unknown")
     case "$status" in
-      healthy)
+      running)
         if nc -z 127.0.0.1 "$VERTICA_PORT"; then
           ready=1
           break
         fi
         ;;
-      unhealthy)
+      exited|dead)
         docker logs vertica_ce || true
         exit 1
         ;;
