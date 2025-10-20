@@ -715,7 +715,7 @@ def _ensure_ecr_login_if_needed(compose_file: Path) -> None:
 
 
 def ensure_vertica_container_running(
-    timeout: float = 900.0, compose_timeout: float = 300.0
+    timeout: float = 1800.0, compose_timeout: float = 300.0
 ) -> None:
     log(STEP_SEPARATOR)
     log('Ensuring Vertica container vertica_ce is running')
