@@ -343,24 +343,21 @@ def _download_docker_compose_binary(version: str = 'v2.27.1') -> bool:
     return True
 
 
+_COMPOSE_FILE_CANDIDATES = [
+    Path('/opt/compose.remote.yml'),
+    Path('/opt/compose.remote.yaml'),
+    Path('/opt/compose.yml'),
+    Path('/opt/compose.yaml'),
+]
+
+
 def _compose_file() -> Optional[Path]:
     """Return the compose file path if present on disk."""
 
-    candidates = [
-        Path('/opt/compose.remote.yml'),
-        Path('/opt/compose.remote.yaml'),
-        Path('/opt/compose.yml'),
-        Path('/opt/compose.yaml'),
-    ]
-
-    for candidate in candidates:
+    for candidate in _COMPOSE_FILE_CANDIDATES:
         if candidate.is_file():
             return candidate
 
-    log(
-        'Unable to locate compose file. Checked: '
-        + ', '.join(str(candidate) for candidate in candidates)
-    )
     return None
 
 
@@ -388,9 +385,10 @@ def ensure_vertica_container_running(timeout: float = 900.0) -> None:
     log('Ensuring Vertica container vertica_ce is running')
 
     _ensure_docker_compose_cli()
-    command = _compose_command()
     deadline = time.time() + timeout
     last_status: tuple[Optional[str], Optional[str]] = (None, None)
+    compose_command: Optional[list[str]] = None
+    compose_missing_logged = False
 
     while time.time() < deadline:
         status = _docker_inspect('vertica_ce', '{{.State.Status}}')
@@ -404,9 +402,22 @@ def ensure_vertica_container_running(timeout: float = 900.0) -> None:
             log(f'Current Vertica container status: {status or "<absent>"}, health: {health or "<unknown>"}')
 
         if status is None:
-            if command is None:
-                raise SystemExit('Docker compose is not available to start vertica_ce container')
-            run_command(command)
+            if compose_command is None:
+                compose_command = _compose_command()
+            if compose_command is None:
+                if not compose_missing_logged:
+                    compose_missing_logged = True
+                    log(
+                        'Compose file not yet available; checked: '
+                        + ', '.join(str(candidate) for candidate in _COMPOSE_FILE_CANDIDATES)
+                    )
+                time.sleep(5)
+                continue
+
+            if compose_missing_logged:
+                log('Compose file detected; attempting to start vertica_ce via docker compose')
+                compose_missing_logged = False
+            run_command(compose_command)
         elif status not in {'running', 'restarting'}:
             run_command(['docker', 'start', 'vertica_ce'])
 
