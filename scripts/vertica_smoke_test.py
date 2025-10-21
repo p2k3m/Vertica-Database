@@ -61,6 +61,84 @@ def _quote_identifier(identifier: str) -> str:
 
 _METADATA_TOKEN: Optional[str] = None
 
+VERTICA_DATA_DIRECTORIES = [Path('/var/lib/vertica')]
+_VERTICA_DATA_DIR_MODE = 0o777
+
+
+def _ensure_directory(path: Path) -> bool:
+    try:
+        if path.exists() and path.is_symlink():
+            log(f'Removing unexpected symlink at {path}')
+            path.unlink()
+    except OSError as exc:
+        log(f'Unable to inspect {path}: {exc}')
+        return False
+
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log(f'Unable to create directory {path}: {exc}')
+        return False
+
+    try:
+        os.chmod(path, _VERTICA_DATA_DIR_MODE)
+    except OSError as exc:
+        log(f'Unable to adjust permissions on {path}: {exc}')
+
+    try:
+        os.chown(path, 500, 500)
+    except PermissionError:
+        log(f'Insufficient privileges to change ownership of {path}; continuing')
+    except OSError as exc:
+        log(f'Unable to adjust ownership of {path}: {exc}')
+
+    return True
+
+
+def _sanitize_vertica_data_directories() -> None:
+    log(STEP_SEPARATOR)
+    log('Ensuring Vertica data directories are accessible to the container')
+
+    for base_path in VERTICA_DATA_DIRECTORIES:
+        if not _ensure_directory(base_path):
+            continue
+
+        vertica_root = base_path / 'vertica'
+        if vertica_root.exists() and vertica_root.is_symlink():
+            try:
+                target = os.readlink(vertica_root)
+            except OSError as exc:
+                log(f'Unable to inspect symlink {vertica_root}: {exc}')
+            else:
+                if target.startswith('/data') or target.startswith('data'):
+                    log(
+                        f'Removing recursive symlink {vertica_root} -> {target} '
+                        'to avoid Vertica bootstrap loops'
+                    )
+                    try:
+                        vertica_root.unlink()
+                    except OSError as exc:
+                        log(f'Unable to remove {vertica_root}: {exc}')
+        _ensure_directory(vertica_root)
+
+        config_path = vertica_root / 'config'
+        if config_path.exists() and config_path.is_symlink():
+            try:
+                target = os.readlink(config_path)
+            except OSError as exc:
+                log(f'Unable to inspect symlink {config_path}: {exc}')
+            else:
+                if target.startswith('/data') or target.startswith('data'):
+                    log(
+                        f'Removing recursive symlink {config_path} -> {target} '
+                        'to allow Vertica to recreate configuration files'
+                    )
+                    try:
+                        config_path.unlink()
+                    except OSError as exc:
+                        log(f'Unable to remove {config_path}: {exc}')
+        _ensure_directory(config_path)
+
 
 def get_metadata_token(timeout: float = 2.0) -> Optional[str]:
     """Return an IMDSv2 session token, or None if the token endpoint is unavailable."""
@@ -266,11 +344,15 @@ def _docker_inspect(container: str, template: str) -> Optional[str]:
 def _docker_health_log(container: str) -> list[dict[str, object]]:
     """Return the Docker health check log entries for ``container``."""
 
-    result = subprocess.run(
-        ['docker', 'inspect', '--format', '{{json .State.Health.Log}}', container],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ['docker', 'inspect', '--format', '{{json .State.Health.Log}}', container],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while inspecting container health log')
+        return []
     if result.returncode != 0:
         return []
 
@@ -1356,6 +1438,7 @@ def main() -> int:
     log(f'Instance public IPv4: {public_ipv4}')
 
     ensure_docker_service()
+    _sanitize_vertica_data_directories()
     ensure_vertica_container_running()
     wait_for_port('127.0.0.1', DB_PORT)
     log('Verified Vertica port 5433 is accepting TCP connections on localhost')
