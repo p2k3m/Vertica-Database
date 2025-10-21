@@ -118,3 +118,34 @@ def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
     smoke.ensure_vertica_container_running(timeout=30.0, compose_timeout=0.0)
 
     assert not calls
+
+
+def test_connect_and_query_disables_tls(monkeypatch):
+    captured_config: dict[str, object] = {}
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            class Cursor:
+                def execute(self, query):
+                    return None
+
+                def fetchone(self):
+                    return (1,)
+
+            return Cursor()
+
+    def fake_connect(**config):
+        captured_config.update(config)
+        return FakeConnection()
+
+    monkeypatch.setattr(smoke, 'vertica_python', type('Module', (), {'connect': fake_connect}))
+
+    smoke.connect_and_query('label', 'host', 'user', 'password', attempts=1, delay=0)
+
+    assert captured_config['tlsmode'] == 'disable'

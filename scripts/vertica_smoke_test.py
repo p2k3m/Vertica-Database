@@ -969,6 +969,7 @@ def connect_and_query(
         'password': password,
         'database': DB_NAME,
         'autocommit': True,
+        'tlsmode': 'disable',
     }
 
     last_error: Optional[BaseException] = None
