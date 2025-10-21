@@ -538,7 +538,7 @@ _ECR_PRIVATE_RE = re.compile(
     r'^(?P<registry>[0-9]+\.dkr\.ecr\.(?P<region>[a-z0-9-]+)\.amazonaws\.com)(?P<path>/.+)$'
 )
 _ECR_PUBLIC_RE = re.compile(r'^(?P<registry>public\.ecr\.aws)(?P<path>/.+)$')
-_ECR_LOGIN_ATTEMPTS: set[str] = set()
+_ECR_LOGIN_RESULTS: dict[str, bool] = {}
 _URLLIB3_REPAIR_ATTEMPTED = False
 _PYTHON_SITE_PACKAGES_RE = re.compile(
     r'File "(?P<path>/usr/(?:local/)?lib(?:64)?/python[0-9.]+/site-packages)/'
@@ -744,7 +744,7 @@ def _extract_compose_image(compose_file: Path) -> Optional[str]:
     return None
 
 
-def _ensure_ecr_login_for_image(image_name: str) -> None:
+def _ensure_ecr_login_for_image(image_name: str) -> bool:
     match = _ECR_PRIVATE_RE.match(image_name)
     registry: Optional[str]
     region: Optional[str]
@@ -755,21 +755,21 @@ def _ensure_ecr_login_for_image(image_name: str) -> None:
     else:
         match_public = _ECR_PUBLIC_RE.match(image_name)
         if not match_public:
-            return
+            return True
         registry = match_public.group('registry')
         region = 'us-east-1'
 
-    if registry in _ECR_LOGIN_ATTEMPTS:
-        return
-
-    _ECR_LOGIN_ATTEMPTS.add(registry)
+    cached = _ECR_LOGIN_RESULTS.get(registry)
+    if cached is not None:
+        return cached
 
     if shutil.which('aws') is None:
         log(
             'AWS CLI is not available on the instance; unable to perform docker login for '
             f'{registry}'
         )
-        return
+        _ECR_LOGIN_RESULTS[registry] = False
+        return False
 
     if match:
         log(STEP_SEPARATOR)
@@ -779,7 +779,9 @@ def _ensure_ecr_login_for_image(image_name: str) -> None:
                 ['aws', 'ecr', 'get-login-password', '--region', region]
             )
         except subprocess.CalledProcessError as exc:  # pragma: no cover - runtime failure path
-            raise SystemExit('Failed to retrieve ECR login password') from exc
+            log('Failed to retrieve ECR login password; continuing without refreshing image')
+            _ECR_LOGIN_RESULTS[registry] = False
+            return False
     else:
         log(STEP_SEPARATOR)
         log(f'Attempting ECR Public login for registry {registry}')
@@ -788,12 +790,15 @@ def _ensure_ecr_login_for_image(image_name: str) -> None:
                 ['aws', 'ecr-public', 'get-login-password', '--region', region]
             )
         except subprocess.CalledProcessError as exc:  # pragma: no cover - runtime failure path
-            raise SystemExit('Failed to retrieve ECR Public login password') from exc
+            log('Failed to retrieve ECR Public login password; continuing without refreshing image')
+            _ECR_LOGIN_RESULTS[registry] = False
+            return False
 
     password = password_result.stdout.strip()
     if not password:
         log('ECR login password command returned empty output; skipping docker login')
-        return
+        _ECR_LOGIN_RESULTS[registry] = False
+        return False
 
     log(STEP_SEPARATOR)
     log(f'Logging in to Docker registry {registry}')
@@ -808,7 +813,22 @@ def _ensure_ecr_login_for_image(image_name: str) -> None:
     if login_result.stderr:
         log(f'[stderr] {login_result.stderr.rstrip()}')
     if login_result.returncode != 0:
-        raise SystemExit(f'Docker login for {registry} failed with exit code {login_result.returncode}')
+        log(
+            f'Docker login for {registry} failed with exit code {login_result.returncode}; '
+            'continuing without refreshing image'
+        )
+        _ECR_LOGIN_RESULTS[registry] = False
+        return False
+
+    _ECR_LOGIN_RESULTS[registry] = True
+    return True
+
+
+def _pull_image_if_possible(image_name: str) -> None:
+    try:
+        run_command(['docker', 'pull', image_name])
+    except SystemExit as exc:
+        log(f'Docker pull for {image_name} failed: {exc}')
 
 
 def _ensure_ecr_login_if_needed(compose_file: Path) -> None:
@@ -1091,7 +1111,7 @@ def main() -> int:
     if image_name:
         log(f'Vertica container image: {image_name}')
         _ensure_ecr_login_for_image(image_name)
-        run_command(['docker', 'pull', image_name])
+        _pull_image_if_possible(image_name)
     run_command(['docker', 'inspect', '--format', '{{json .NetworkSettings.Ports}}', 'vertica_ce'])
 
     bootstrap_user, bootstrap_password = _bootstrap_admin_credentials()
