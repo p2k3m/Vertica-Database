@@ -245,3 +245,88 @@ def test_pull_image_failure_is_non_fatal(monkeypatch):
     smoke._pull_image_if_possible('my-image:latest')
 
     assert any('Docker pull for my-image:latest failed' in msg for msg in messages)
+
+
+def test_ensure_primary_admin_user_creates_user(monkeypatch):
+    executed: list[tuple[str, tuple | list | None]] = []
+
+    class FakeCursor:
+        def __init__(self):
+            self._last_query: Optional[str] = None
+
+        def execute(self, query, params=None):
+            executed.append((query, params))
+            self._last_query = query
+
+        def fetchone(self):
+            if self._last_query and 'SELECT 1 FROM users' in self._last_query:
+                return None
+            return (1,)
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(smoke.vertica_python, 'connect', lambda **config: FakeConnection())
+
+    smoke._ensure_primary_admin_user('dbadmin', '', 'appadmin', 'secret')
+
+    statements = [statement for statement, _ in executed]
+    assert any(statement.startswith('CREATE USER "appadmin"') for statement in statements)
+    assert any('GRANT ALL PRIVILEGES ON DATABASE "VMart"' in statement for statement in statements)
+
+
+def test_ensure_primary_admin_user_rotates_password(monkeypatch):
+    executed: list[tuple[str, tuple | list | None]] = []
+
+    class FakeCursor:
+        def __init__(self):
+            self._last_query: Optional[str] = None
+
+        def execute(self, query, params=None):
+            executed.append((query, params))
+            self._last_query = query
+
+        def fetchone(self):
+            if self._last_query and 'SELECT 1 FROM users' in self._last_query:
+                return (1,)
+            return (1,)
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(smoke.vertica_python, 'connect', lambda **config: FakeConnection())
+
+    smoke._ensure_primary_admin_user('dbadmin', '', 'appadmin', 'secret')
+
+    statements = [statement for statement, _ in executed]
+    assert any(statement.startswith('ALTER USER "appadmin"') for statement in statements)
+    assert all(not statement.startswith('CREATE USER') for statement in statements[1:])
+
+
+def test_ensure_primary_admin_user_skips_when_matching_bootstrap(monkeypatch):
+    called = False
+
+    def fake_connect(**config):
+        nonlocal called
+        called = True
+        raise AssertionError('connect should not be called')
+
+    monkeypatch.setattr(smoke.vertica_python, 'connect', fake_connect)
+
+    smoke._ensure_primary_admin_user('appadmin', '', 'appadmin', 'secret')
+
+    assert called is False
