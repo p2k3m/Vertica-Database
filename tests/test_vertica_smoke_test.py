@@ -1,8 +1,9 @@
 import importlib
 import os
-import subprocess
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -279,6 +280,58 @@ def test_pull_image_failure_is_non_fatal(monkeypatch):
     smoke._pull_image_if_possible('my-image:latest')
 
     assert any('Docker pull for my-image:latest failed' in msg for msg in messages)
+
+
+def test_compose_up_removes_stale_vertica_container(monkeypatch):
+    compose_path = Path('/opt/compose.remote.yml')
+    run_calls: list[list[str]] = []
+    removal_calls: list[int] = []
+
+    def fake_run_command(command: list[str]):
+        run_calls.append(command)
+        if len(run_calls) == 1:
+            raise SystemExit('initial failure')
+
+    def fake_remove() -> bool:
+        removal_calls.append(1)
+        return True
+
+    monkeypatch.setattr(smoke, '_docker_compose_plugin_available', lambda: True)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(smoke, 'run_command', fake_run_command)
+    monkeypatch.setattr(smoke, '_remove_stale_vertica_container', fake_remove)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+
+    smoke._compose_up(compose_path)
+
+    assert len(run_calls) == 2
+    assert len(removal_calls) == 1
+
+
+def test_compose_up_raises_when_stale_container_removal_fails(monkeypatch):
+    compose_path = Path('/opt/compose.remote.yml')
+    run_calls: list[list[str]] = []
+    removal_calls: list[int] = []
+
+    def fake_run_command(command: list[str]):
+        run_calls.append(command)
+        raise SystemExit('persistent failure')
+
+    def fake_remove() -> bool:
+        removal_calls.append(1)
+        return False
+
+    monkeypatch.setattr(smoke, '_docker_compose_plugin_available', lambda: True)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(smoke, 'run_command', fake_run_command)
+    monkeypatch.setattr(smoke, '_remove_stale_vertica_container', fake_remove)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+
+    with pytest.raises(SystemExit):
+        smoke._compose_up(compose_path)
+
+    assert len(run_calls) == 1
+    assert len(removal_calls) == 1
 
 
 def test_ensure_primary_admin_user_creates_user(monkeypatch):
