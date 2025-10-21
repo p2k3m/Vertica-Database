@@ -12,6 +12,7 @@ else
 fi
 
 "$PKG_MGR" install -y amazon-ssm-agent awscli docker docker-compose-plugin jq nmap-ncat python3 python3-pip
+"$PKG_MGR" update -y amazon-ssm-agent || true
 systemctl enable --now docker
 
 # Configure the SSM agent before starting it so that registration succeeds reliably
@@ -80,15 +81,21 @@ ADDITIONAL_ADMIN_PASS="${additional_admin_password}"
 VERTICA_DB_NAME="${vertica_db_name}"
 VERTICA_PORT="${vertica_port}"
 
-# ECR (or ECR Public) login if the image requires it (best effort)
+# Perform an ECR (or ECR Public) login when the Vertica image is hosted there
 if [[ "$VERTICA_IMAGE" =~ ^([0-9]+\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com)(/.+)$ ]]; then
   ECR_HOST="$${BASH_REMATCH[1]}"
   ECR_REGION="$${BASH_REMATCH[2]}"
-  aws ecr get-login-password --region "$ECR_REGION" \
-    | docker login --username AWS --password-stdin "$ECR_HOST" || true
+  if ! aws ecr get-login-password --region "$ECR_REGION" \
+    | docker login --username AWS --password-stdin "$ECR_HOST"; then
+    echo "[user-data] Failed to authenticate to ECR registry $ECR_HOST" >&2
+    exit 1
+  fi
 elif [[ "$VERTICA_IMAGE" =~ ^public\.ecr\.aws/ ]]; then
-  aws ecr-public get-login-password --region us-east-1 \
-    | docker login --username AWS --password-stdin public.ecr.aws || true
+  if ! aws ecr-public get-login-password --region us-east-1 \
+    | docker login --username AWS --password-stdin public.ecr.aws; then
+    echo "[user-data] Failed to authenticate to ECR Public" >&2
+    exit 1
+  fi
 fi
 
 # Render compose (Vertica only)
@@ -99,6 +106,12 @@ services:
     container_name: vertica_ce
     restart: always
     ports: ["${vertica_port}:${vertica_port}"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/vertica/bin/vsql -h localhost -p ${vertica_port} -d ${vertica_db_name} -U ${bootstrap_admin_username} -w \"${bootstrap_admin_password}\" -c 'SELECT 1' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     ulimits:
       nofile: { soft: 65536, hard: 65536 }
     volumes:

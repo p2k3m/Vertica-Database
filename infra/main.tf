@@ -109,45 +109,6 @@ resource "aws_iam_role" "ec2_role" {
   }
 }
 
-resource "aws_iam_role_policy" "ecr_ssm_logs" {
-  name = "${local.project}-ecr-ssm-logs"
-  role = aws_iam_role.ec2_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "ecr:GetAuthorizationToken",
-          "ecr:BatchGetImage",
-          "ecr:GetDownloadUrlForLayer"
-        ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "ssm:*",
-          "ec2messages:*",
-          "ssmmessages:*"
-        ]
-        Resource = "*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:DescribeLogStreams",
-          "logs:PutLogEvents"
-        ]
-        Resource = "*"
-      }
-    ]
-  })
-}
-
 resource "aws_iam_instance_profile" "ec2_profile" {
   name = local.profile_name
   role = aws_iam_role.ec2_role.name
@@ -156,6 +117,25 @@ resource "aws_iam_instance_profile" "ec2_profile" {
 resource "aws_iam_role_policy_attachment" "ssm_core" {
   role       = aws_iam_role.ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_role_policy_attachment" "cloudwatch_logs" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
+}
+
+resource "aws_iam_role_policy_attachment" "ecr_read_only" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
+resource "aws_cloudwatch_log_group" "smoke_test" {
+  name              = "/aws/vertica/${local.project}/smoke-test"
+  retention_in_days = 30
+
+  tags = {
+    Project = local.project
+  }
 }
 
 resource "aws_instance" "host" {
