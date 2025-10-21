@@ -263,6 +263,92 @@ def _docker_inspect(container: str, template: str) -> Optional[str]:
     return value or None
 
 
+def _docker_health_log(container: str) -> list[dict[str, object]]:
+    """Return the Docker health check log entries for ``container``."""
+
+    result = subprocess.run(
+        ['docker', 'inspect', '--format', '{{json .State.Health.Log}}', container],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+
+    output = result.stdout.strip()
+    if not output or output == 'null':
+        return []
+
+    try:
+        entries = json.loads(output)
+    except json.JSONDecodeError:
+        return []
+
+    if not isinstance(entries, list):
+        return []
+
+    health_entries: list[dict[str, object]] = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            health_entries.append(entry)
+    return health_entries
+
+
+def _log_health_log_entries(
+    container: str,
+    seen_count: int,
+) -> int:
+    """Log new Docker health check entries for ``container``.
+
+    Returns the updated count of observed entries.
+    """
+
+    entries = _docker_health_log(container)
+    if not entries:
+        return seen_count
+
+    if len(entries) < seen_count:
+        seen_count = 0
+
+    new_entries = entries[seen_count:]
+    if not new_entries:
+        return seen_count
+
+    for entry in new_entries:
+        exit_code = entry.get('ExitCode')
+        output = entry.get('Output') or ''
+        start_ts = entry.get('Start') or '<unknown>'
+        end_ts = entry.get('End') or '<unknown>'
+        log(
+            '  - Health check invocation '
+            f'started {start_ts}, ended {end_ts}, exit code {exit_code}'
+        )
+        formatted_output = str(output).rstrip()
+        if formatted_output:
+            for line in formatted_output.splitlines():
+                log(f'      {line}')
+
+    return len(entries)
+
+
+def _log_container_tail(container: str, tail: int = 200) -> None:
+    """Log the most recent ``tail`` lines of stdout/stderr from ``container``."""
+
+    result = subprocess.run(
+        ['docker', 'logs', '--tail', str(tail), container],
+        capture_output=True,
+        text=True,
+    )
+
+    log(STEP_SEPARATOR)
+    log(f'Last {tail} log lines from {container}')
+    if result.stdout:
+        log(result.stdout.rstrip())
+    if result.stderr:
+        log(f'[stderr] {result.stderr.rstrip()}')
+    if result.returncode != 0:
+        log(f'Unable to read logs from {container}: exit code {result.returncode}')
+
+
 def _fetch_container_env(container: str) -> dict[str, str]:
     """Return the environment variables for ``container`` as a dictionary."""
 
@@ -930,15 +1016,20 @@ def ensure_vertica_container_running(
     recreate_attempts = 0
     unhealthy_observed_at: Optional[float] = None
     unhealthy_logged_duration: Optional[float] = None
+    health_log_count = 0
+    last_unhealthy_log_dump: Optional[float] = None
 
     compose_deadline = time.time() + compose_timeout
 
     while time.time() < deadline:
         status = _docker_inspect('vertica_ce', '{{.State.Status}}')
         health = _docker_inspect('vertica_ce', '{{if .State.Health}}{{.State.Health.Status}}{{end}}')
+        if status:
+            health_log_count = _log_health_log_entries('vertica_ce', health_log_count)
         if status == 'running' and (not health or health == 'healthy'):
             unhealthy_observed_at = None
             unhealthy_logged_duration = None
+            last_unhealthy_log_dump = None
             log(f'Vertica container status: {status}, health: {health or "unknown"}')
             return
 
@@ -948,6 +1039,7 @@ def ensure_vertica_container_running(
             if health != 'unhealthy':
                 unhealthy_observed_at = None
                 unhealthy_logged_duration = None
+                last_unhealthy_log_dump = None
 
         if status is None:
             if compose_file is None:
@@ -974,18 +1066,28 @@ def ensure_vertica_container_running(
             _compose_up(compose_file)
             restart_attempts = 0
             recreate_attempts = 0
+            unhealthy_observed_at = None
+            unhealthy_logged_duration = None
+            last_unhealthy_log_dump = None
         elif status not in {'running', 'restarting'}:
             run_command(['docker', 'start', 'vertica_ce'])
             restart_attempts = 0
             recreate_attempts = 0
             unhealthy_observed_at = None
             unhealthy_logged_duration = None
+            last_unhealthy_log_dump = None
         elif health == 'unhealthy':
             now = time.time()
             if unhealthy_observed_at is None:
                 unhealthy_observed_at = now
 
             unhealthy_duration = now - unhealthy_observed_at
+            if (
+                unhealthy_duration >= 120
+                and (last_unhealthy_log_dump is None or now - last_unhealthy_log_dump >= 120)
+            ):
+                _log_container_tail('vertica_ce', tail=200)
+                last_unhealthy_log_dump = now
             if (
                 unhealthy_duration
                 < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS
@@ -1028,6 +1130,7 @@ def ensure_vertica_container_running(
                 time.sleep(10)
                 unhealthy_observed_at = None
                 unhealthy_logged_duration = None
+                last_unhealthy_log_dump = None
                 continue
 
             if compose_file is None:
@@ -1041,6 +1144,7 @@ def ensure_vertica_container_running(
                 time.sleep(15)
                 unhealthy_observed_at = None
                 unhealthy_logged_duration = None
+                last_unhealthy_log_dump = None
                 continue
 
             log('Vertica container is still unhealthy after recovery attempts; collecting diagnostics')
