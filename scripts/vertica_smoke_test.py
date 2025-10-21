@@ -29,7 +29,11 @@ if ADMIN_PASSWORD is None:
     raise SystemExit('Missing ADMIN_PASSWORD value')
 
 STEP_SEPARATOR = '=' * 72
-UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS = 300.0
+# The Vertica container can take several minutes to transition from "starting"
+# to a healthy state while it performs initial database setup work. Allow a
+# generous grace period before attempting restarts so we do not thrash the
+# container during long but successful bootstraps.
+UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS = 900.0
 
 
 def log(message: str) -> None:
