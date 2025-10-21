@@ -49,6 +49,12 @@ def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
     return result
 
 
+def _quote_identifier(identifier: str) -> str:
+    """Return ``identifier`` quoted for use in Vertica SQL statements."""
+
+    return '"' + identifier.replace('"', '""') + '"'
+
+
 _METADATA_TOKEN: Optional[str] = None
 
 
@@ -1041,6 +1047,63 @@ def _bootstrap_admin_credentials() -> tuple[str, str]:
     return _BOOTSTRAP_ADMIN_CREDENTIALS
 
 
+def _ensure_primary_admin_user(
+    bootstrap_user: str,
+    bootstrap_password: str,
+    admin_user: str,
+    admin_password: str,
+) -> None:
+    """Ensure the primary admin user exists with the expected credentials."""
+
+    if admin_user == bootstrap_user:
+        return
+
+    log(STEP_SEPARATOR)
+    log(
+        'Ensuring primary admin user '
+        f"{admin_user!r} exists and has the expected credentials"
+    )
+    config = {
+        'host': '127.0.0.1',
+        'port': DB_PORT,
+        'user': bootstrap_user,
+        'password': bootstrap_password,
+        'database': DB_NAME,
+        'autocommit': True,
+        'tlsmode': 'disable',
+    }
+
+    with vertica_python.connect(**config) as connection:
+        cursor = connection.cursor()
+        cursor.execute('SELECT 1 FROM users WHERE user_name = %s', [admin_user])
+        exists = cursor.fetchone() is not None
+
+        if exists:
+            log(f'Primary admin user {admin_user!r} already exists; rotating password')
+            cursor.execute(
+                f'ALTER USER {_quote_identifier(admin_user)} IDENTIFIED BY %s',
+                [admin_password],
+            )
+        else:
+            log(f'Creating primary admin user {admin_user!r}')
+            cursor.execute(
+                f'CREATE USER {_quote_identifier(admin_user)} IDENTIFIED BY %s',
+                [admin_password],
+            )
+
+        grants = [
+            f'GRANT CONNECT ON DATABASE {_quote_identifier(DB_NAME)} TO '
+            f'{_quote_identifier(admin_user)}',
+            f'GRANT ALL PRIVILEGES ON DATABASE {_quote_identifier(DB_NAME)} TO '
+            f'{_quote_identifier(admin_user)}',
+            f'GRANT USAGE ON SCHEMA PUBLIC TO {_quote_identifier(admin_user)}',
+            f'GRANT ALL PRIVILEGES ON SCHEMA PUBLIC TO {_quote_identifier(admin_user)}',
+        ]
+
+        for statement in grants:
+            cursor.execute(statement)
+
+
 def connect_and_query(
     label: str,
     host: str,
@@ -1125,7 +1188,10 @@ def main() -> int:
     connect_and_query(
         f'{bootstrap_user}@localhost', '127.0.0.1', bootstrap_user, bootstrap_password
     )
-    connect_and_query('bootstrap_admin@localhost', '127.0.0.1', ADMIN_USER, ADMIN_PASSWORD)
+    _ensure_primary_admin_user(
+        bootstrap_user, bootstrap_password, ADMIN_USER, ADMIN_PASSWORD
+    )
+    connect_and_query('primary_admin@localhost', '127.0.0.1', ADMIN_USER, ADMIN_PASSWORD)
 
     if not connect_and_query(
         f'{bootstrap_user}@public_ip',
@@ -1146,10 +1212,20 @@ def main() -> int:
     smoke_user_created = False
     with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True) as admin_conn:
         admin_cursor = admin_conn.cursor()
-        admin_cursor.execute(f'CREATE USER "{smoke_user}" IDENTIFIED BY %s', [smoke_pass])
-        admin_cursor.execute(f'GRANT ALL PRIVILEGES ON DATABASE "{DB_NAME}" TO "{smoke_user}"')
-        admin_cursor.execute(f'GRANT USAGE ON SCHEMA PUBLIC TO "{smoke_user}"')
-        admin_cursor.execute(f'GRANT ALL PRIVILEGES ON SCHEMA PUBLIC TO "{smoke_user}"')
+        admin_cursor.execute(
+            f'CREATE USER {_quote_identifier(smoke_user)} IDENTIFIED BY %s',
+            [smoke_pass],
+        )
+        admin_cursor.execute(
+            f'GRANT ALL PRIVILEGES ON DATABASE {_quote_identifier(DB_NAME)} '
+            f'TO {_quote_identifier(smoke_user)}'
+        )
+        admin_cursor.execute(
+            f'GRANT USAGE ON SCHEMA PUBLIC TO {_quote_identifier(smoke_user)}'
+        )
+        admin_cursor.execute(
+            f'GRANT ALL PRIVILEGES ON SCHEMA PUBLIC TO {_quote_identifier(smoke_user)}'
+        )
         smoke_user_created = True
 
     try:
@@ -1159,7 +1235,9 @@ def main() -> int:
             log(STEP_SEPARATOR)
             log(f'Dropping smoke test user {smoke_user!r}')
             with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True) as admin_conn:
-                admin_conn.cursor().execute(f'DROP USER "{smoke_user}" CASCADE')
+                admin_conn.cursor().execute(
+                    f'DROP USER {_quote_identifier(smoke_user)} CASCADE'
+                )
 
     log(STEP_SEPARATOR)
     log('All smoke test checks completed successfully')
