@@ -67,6 +67,7 @@ VERTICA_DATA_DIRECTORIES = [Path('/var/lib/vertica')]
 # may choose a different runtime identity. Use permissive modes rather than
 # forcing ownership so that any future uid/gid changes continue to work.
 _VERTICA_DATA_DIR_MODE = 0o777
+_VERTICA_CONTAINER_ADMINTOOLS_PATH = '/opt/vertica/config/admintools.conf'
 
 DEFAULT_ADMINTOOLS_CONF = textwrap.dedent(
     """
@@ -322,6 +323,96 @@ def _seed_default_admintools_conf(config_dir: Path) -> None:
             'Unable to relax permissions on '
             f'{admintools_conf}: {exc}'
         )
+
+
+def _ensure_container_admintools_conf_readable(container: str) -> bool:
+    """Relax permissions on ``admintools.conf`` inside ``container`` if required.
+
+    Returns ``True`` when a permission adjustment was attempted, otherwise ``False``.
+    """
+
+    if shutil.which('docker') is None:
+        return False
+
+    quoted_path = shlex.quote(_VERTICA_CONTAINER_ADMINTOOLS_PATH)
+
+    try:
+        exists_result = subprocess.run(
+            [
+                'docker',
+                'exec',
+                '--user',
+                '0',
+                container,
+                'sh',
+                '-c',
+                f'test -e {quoted_path}',
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while inspecting admintools.conf inside container')
+        return False
+
+    if exists_result.returncode != 0:
+        return False
+
+    try:
+        readable_result = subprocess.run(
+            [
+                'docker',
+                'exec',
+                '--user',
+                'dbadmin',
+                container,
+                'sh',
+                '-c',
+                f'test -r {quoted_path}',
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while validating admintools.conf permissions inside container')
+        return False
+
+    if readable_result.returncode == 0:
+        return False
+
+    log(
+        'Detected unreadable admintools.conf inside container; attempting to relax permissions'
+    )
+
+    try:
+        fix_result = subprocess.run(
+            [
+                'docker',
+                'exec',
+                '--user',
+                '0',
+                container,
+                'sh',
+                '-c',
+                f'chmod a+r {quoted_path}',
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while adjusting admintools.conf permissions inside container')
+        return False
+
+    if fix_result.stdout:
+        log(fix_result.stdout.rstrip())
+    if fix_result.stderr:
+        log(f'[stderr] {fix_result.stderr.rstrip()}')
+
+    if fix_result.returncode == 0:
+        return True
+
+    log('Failed to adjust admintools.conf permissions inside container')
+    return False
 
 
 def _reset_vertica_data_directories() -> bool:
@@ -1367,6 +1458,7 @@ def ensure_vertica_container_running(
     unhealthy_logged_duration: Optional[float] = None
     health_log_count = 0
     last_unhealthy_log_dump: Optional[float] = None
+    admintools_permissions_checked = False
 
     compose_deadline = time.time() + compose_timeout
 
@@ -1379,6 +1471,7 @@ def ensure_vertica_container_running(
             unhealthy_observed_at = None
             unhealthy_logged_duration = None
             last_unhealthy_log_dump = None
+            admintools_permissions_checked = False
             log(f'Vertica container status: {status}, health: {health or "unknown"}')
             return
 
@@ -1389,6 +1482,7 @@ def ensure_vertica_container_running(
                 unhealthy_observed_at = None
                 unhealthy_logged_duration = None
                 last_unhealthy_log_dump = None
+                admintools_permissions_checked = False
 
         if status is None:
             if compose_file is None:
@@ -1418,6 +1512,7 @@ def ensure_vertica_container_running(
             unhealthy_observed_at = None
             unhealthy_logged_duration = None
             last_unhealthy_log_dump = None
+            admintools_permissions_checked = False
         elif status not in {'running', 'restarting'}:
             run_command(['docker', 'start', 'vertica_ce'])
             restart_attempts = 0
@@ -1425,6 +1520,7 @@ def ensure_vertica_container_running(
             unhealthy_observed_at = None
             unhealthy_logged_duration = None
             last_unhealthy_log_dump = None
+            admintools_permissions_checked = False
         elif health == 'unhealthy':
             now = time.time()
             if unhealthy_observed_at is None:
@@ -1437,6 +1533,13 @@ def ensure_vertica_container_running(
             ):
                 _log_container_tail('vertica_ce', tail=200)
                 last_unhealthy_log_dump = now
+
+            if not admintools_permissions_checked:
+                admintools_permissions_checked = True
+                if _ensure_container_admintools_conf_readable('vertica_ce'):
+                    log('Relaxed admintools.conf permissions inside container; waiting for recovery')
+                    time.sleep(5)
+                    continue
             if (
                 unhealthy_duration
                 < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS
@@ -1445,13 +1548,13 @@ def ensure_vertica_container_running(
                     unhealthy_logged_duration is None
                     or unhealthy_duration - unhealthy_logged_duration >= 30
                     or unhealthy_duration < unhealthy_logged_duration
-                ):
-                    log(
-                        'Vertica container health reported unhealthy but has '
-                        f'been unhealthy for {unhealthy_duration:.0f}s; '
-                        'waiting for recovery'
-                    )
-                    unhealthy_logged_duration = unhealthy_duration
+                    ):
+                        log(
+                            'Vertica container health reported unhealthy but has '
+                            f'been unhealthy for {unhealthy_duration:.0f}s; '
+                            'waiting for recovery'
+                        )
+                        unhealthy_logged_duration = unhealthy_duration
                 time.sleep(10)
                 continue
 
