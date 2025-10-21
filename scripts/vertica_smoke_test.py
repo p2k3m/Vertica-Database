@@ -137,7 +137,17 @@ def _sanitize_vertica_data_directories() -> None:
                         config_path.unlink()
                     except OSError as exc:
                         log(f'Unable to remove {config_path}: {exc}')
-        _ensure_directory(config_path)
+
+        # When the Vertica container starts for the first time it populates the
+        # ``config`` directory with critical bootstrap files such as
+        # ``admintools.conf``.  Creating the directory ahead of time confuses the
+        # container's bootstrap logic (the source and destination of the
+        # configuration copy become identical) which in turn leaves the
+        # configuration incomplete.  Only adjust permissions when the directory
+        # already exists and otherwise allow the container to create it during
+        # startup.
+        if config_path.exists():
+            _ensure_directory(config_path)
 
 
 def get_metadata_token(timeout: float = 2.0) -> Optional[str]:
