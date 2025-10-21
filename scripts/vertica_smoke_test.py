@@ -408,11 +408,89 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
     if fix_result.stderr:
         log(f'[stderr] {fix_result.stderr.rstrip()}')
 
-    if fix_result.returncode == 0:
+    if fix_result.returncode != 0:
+        log('Failed to adjust admintools.conf permissions inside container')
+        return False
+
+    # Re-check readability now that permissions were adjusted.
+    try:
+        readable_result = subprocess.run(
+            [
+                'docker',
+                'exec',
+                '--user',
+                'dbadmin',
+                container,
+                'sh',
+                '-c',
+                f'test -r {quoted_path}',
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while validating admintools.conf permissions inside container')
         return True
 
-    log('Failed to adjust admintools.conf permissions inside container')
-    return False
+    if readable_result.returncode == 0:
+        return True
+
+    # The file permissions alone were insufficient, likely due to restrictive
+    # execute permissions on the parent directory. Attempt to relax directory
+    # permissions as well to allow dbadmin to traverse the path.
+    parent_dir = shlex.quote(str(Path(_VERTICA_CONTAINER_ADMINTOOLS_PATH).parent))
+
+    try:
+        dir_fix_result = subprocess.run(
+            [
+                'docker',
+                'exec',
+                '--user',
+                '0',
+                container,
+                'sh',
+                '-c',
+                f'chmod a+rx {parent_dir}',
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while adjusting admintools.conf directory permissions inside container')
+        return True
+
+    if dir_fix_result.stdout:
+        log(dir_fix_result.stdout.rstrip())
+    if dir_fix_result.stderr:
+        log(f'[stderr] {dir_fix_result.stderr.rstrip()}')
+
+    if dir_fix_result.returncode != 0:
+        log('Failed to adjust admintools.conf directory permissions inside container')
+        return True
+
+    try:
+        readable_result = subprocess.run(
+            [
+                'docker',
+                'exec',
+                '--user',
+                'dbadmin',
+                container,
+                'sh',
+                '-c',
+                f'test -r {quoted_path}',
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while validating admintools.conf permissions inside container')
+        return True
+
+    if readable_result.returncode != 0:
+        log('Unable to verify admintools.conf readability inside container after permission adjustments')
+
+    return True
 
 
 def _reset_vertica_data_directories() -> bool:
