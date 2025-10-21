@@ -26,19 +26,19 @@ while [ $SECONDS -lt $deadline ]; do
   sleep 3
 done
 
-if [ "${docker_ready:-0}" -ne 1 ]; then
+if [ "$${docker_ready:-0}" -ne 1 ]; then
   echo "[user-data] docker daemon failed to report ready" >&2
   journalctl -u docker.service --no-pager -n 200 || true
   exit 1
 fi
 
 COMPOSE_VERSION="v2.29.7"
-COMPOSE_URL="https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64"
+COMPOSE_URL="https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-x86_64"
 COMPOSE_PLUGIN_DIR="/usr/libexec/docker/cli-plugins"
 COMPOSE_PLUGIN_PATH="$COMPOSE_PLUGIN_DIR/docker-compose"
 
 if ! docker compose version >/dev/null 2>&1; then
-  echo "[user-data] Installing docker compose plugin version ${COMPOSE_VERSION}"
+  echo "[user-data] Installing docker compose plugin version $${COMPOSE_VERSION}"
   install -d -m 0755 "$COMPOSE_PLUGIN_DIR"
   curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_PLUGIN_PATH"
   chmod +x "$COMPOSE_PLUGIN_PATH"
