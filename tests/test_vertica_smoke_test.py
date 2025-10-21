@@ -147,9 +147,38 @@ def test_connect_and_query_disables_tls(monkeypatch):
 
     monkeypatch.setattr(smoke, 'vertica_python', type('Module', (), {'connect': fake_connect}))
 
-    smoke.connect_and_query('label', 'host', 'user', 'password', attempts=1, delay=0)
+    assert smoke.connect_and_query('label', 'host', 'user', 'password', attempts=1, delay=0)
 
     assert captured_config['tlsmode'] == 'disable'
+
+
+def test_connect_and_query_nonfatal(monkeypatch):
+    messages: list[str] = []
+
+    def fake_log(message: str) -> None:
+        messages.append(message)
+
+    class FakeErrorsModule:
+        class ConnectionError(Exception):
+            pass
+
+    def fake_connect(**config):
+        raise FakeErrorsModule.ConnectionError('boom')
+
+    monkeypatch.setattr(smoke, 'log', fake_log)
+    monkeypatch.setattr(smoke, 'time', type('Module', (), {'sleep': lambda _: None}))
+    monkeypatch.setattr(
+        smoke,
+        'vertica_python',
+        type('Module', (), {'connect': fake_connect, 'errors': FakeErrorsModule}),
+    )
+
+    result = smoke.connect_and_query(
+        'label', 'host', 'user', 'password', attempts=2, delay=0, fatal=False
+    )
+
+    assert result is False
+    assert any('Failed to connect to Vertica' in message for message in messages)
 
 
 def test_ecr_login_handles_aws_cli_failure(monkeypatch):
