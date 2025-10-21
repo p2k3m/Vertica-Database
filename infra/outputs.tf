@@ -105,3 +105,8 @@ output "ssm_smoke_test_document" {
   value       = aws_ssm_document.vertica_smoke_test.name
 }
 
+output "smoke_test_log_group" {
+  description = "CloudWatch log group used for Vertica smoke test command output"
+  value       = aws_cloudwatch_log_group.smoke_test.name
+}
+

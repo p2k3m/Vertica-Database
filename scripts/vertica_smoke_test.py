@@ -774,8 +774,7 @@ def _ensure_ecr_login_for_image(image_name: str) -> bool:
             'AWS CLI is not available on the instance; unable to perform docker login for '
             f'{registry}'
         )
-        _ECR_LOGIN_RESULTS[registry] = False
-        return False
+        raise SystemExit('AWS CLI is required to authenticate against ECR but is not installed')
 
     if match:
         log(STEP_SEPARATOR)
@@ -785,9 +784,13 @@ def _ensure_ecr_login_for_image(image_name: str) -> bool:
                 ['aws', 'ecr', 'get-login-password', '--region', region]
             )
         except subprocess.CalledProcessError as exc:  # pragma: no cover - runtime failure path
-            log('Failed to retrieve ECR login password; continuing without refreshing image')
-            _ECR_LOGIN_RESULTS[registry] = False
-            return False
+            if exc.stdout:
+                log(exc.stdout.rstrip())
+            if exc.stderr:
+                log(f'[stderr] {exc.stderr.rstrip()}')
+            raise SystemExit(
+                f'Failed to retrieve ECR login password for registry {registry} in region {region}'
+            )
     else:
         log(STEP_SEPARATOR)
         log(f'Attempting ECR Public login for registry {registry}')
@@ -796,15 +799,17 @@ def _ensure_ecr_login_for_image(image_name: str) -> bool:
                 ['aws', 'ecr-public', 'get-login-password', '--region', region]
             )
         except subprocess.CalledProcessError as exc:  # pragma: no cover - runtime failure path
-            log('Failed to retrieve ECR Public login password; continuing without refreshing image')
-            _ECR_LOGIN_RESULTS[registry] = False
-            return False
+            if exc.stdout:
+                log(exc.stdout.rstrip())
+            if exc.stderr:
+                log(f'[stderr] {exc.stderr.rstrip()}')
+            raise SystemExit(
+                f'Failed to retrieve ECR Public login password for registry {registry}'
+            )
 
     password = password_result.stdout.strip()
     if not password:
-        log('ECR login password command returned empty output; skipping docker login')
-        _ECR_LOGIN_RESULTS[registry] = False
-        return False
+        raise SystemExit('ECR login password command returned empty output')
 
     log(STEP_SEPARATOR)
     log(f'Logging in to Docker registry {registry}')
@@ -819,12 +824,9 @@ def _ensure_ecr_login_for_image(image_name: str) -> bool:
     if login_result.stderr:
         log(f'[stderr] {login_result.stderr.rstrip()}')
     if login_result.returncode != 0:
-        log(
-            f'Docker login for {registry} failed with exit code {login_result.returncode}; '
-            'continuing without refreshing image'
+        raise SystemExit(
+            f'Docker login for {registry} failed with exit code {login_result.returncode}'
         )
-        _ECR_LOGIN_RESULTS[registry] = False
-        return False
 
     _ECR_LOGIN_RESULTS[registry] = True
     return True

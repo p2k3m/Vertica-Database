@@ -96,12 +96,14 @@ jobs:
           echo "instance_id=$(terraform output -raw instance_id)" >> $GITHUB_OUTPUT
           echo "admin_user=$(terraform output -raw additional_admin_username)" >> $GITHUB_OUTPUT
           echo "admin_pass=$(terraform output -raw additional_admin_password)" >> $GITHUB_OUTPUT
+          echo "ssm_log_group=$(terraform output -raw smoke_test_log_group)" >> $GITHUB_OUTPUT
 
       - name: Smoke test via SSM
         env:
           INSTANCE_ID: "${{ steps.out.outputs.instance_id }}"
           ADMIN_USER: "${{ steps.out.outputs.admin_user }}"
           ADMIN_PASSWORD: "${{ steps.out.outputs.admin_pass }}"
+          SSM_LOG_GROUP: "${{ steps.out.outputs.ssm_log_group }}"
         run: |
           set -euo pipefail
           echo "Waiting for instance $INSTANCE_ID to pass EC2 status checks..."
@@ -165,6 +167,7 @@ jobs:
             --comment "Vertica smoke test" \
             --instance-ids "$INSTANCE_ID" \
             --parameters file://ssm-commands.json \
+            --cloud-watch-output-config '{"CloudWatchLogGroupName": "'$SSM_LOG_GROUP'", "CloudWatchOutputEnabled": true}' \
             --query 'Command.CommandId' \
             --output text)
 

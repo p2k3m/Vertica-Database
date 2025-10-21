@@ -227,12 +227,13 @@ def test_ecr_login_handles_aws_cli_failure(monkeypatch):
     monkeypatch.setattr(smoke.shutil, 'which', lambda name: '/usr/bin/aws' if name == 'aws' else None)
     smoke._ECR_LOGIN_RESULTS.clear()
 
-    result = smoke._ensure_ecr_login_for_image(
-        '123456789012.dkr.ecr.us-east-1.amazonaws.com/repo:tag'
-    )
+    with pytest.raises(SystemExit) as excinfo:
+        smoke._ensure_ecr_login_for_image(
+            '123456789012.dkr.ecr.us-east-1.amazonaws.com/repo:tag'
+        )
 
-    assert result is False
-    assert any('Failed to retrieve ECR login password' in msg for msg in messages)
+    assert 'Failed to retrieve ECR login password' in str(excinfo.value)
+    assert any('Attempting ECR login for registry' in msg for msg in messages)
 
 
 def test_ecr_login_handles_docker_login_failure(monkeypatch):
@@ -253,12 +254,13 @@ def test_ecr_login_handles_docker_login_failure(monkeypatch):
     monkeypatch.setattr(smoke.shutil, 'which', lambda name: '/usr/bin/aws' if name == 'aws' else None)
     smoke._ECR_LOGIN_RESULTS.clear()
 
-    result = smoke._ensure_ecr_login_for_image(
-        '123456789012.dkr.ecr.us-east-1.amazonaws.com/repo:tag'
-    )
+    with pytest.raises(SystemExit) as excinfo:
+        smoke._ensure_ecr_login_for_image(
+            '123456789012.dkr.ecr.us-east-1.amazonaws.com/repo:tag'
+        )
 
-    assert result is False
-    assert any('Docker login for 123456789012.dkr.ecr.us-east-1.amazonaws.com failed' in msg for msg in messages)
+    assert 'Docker login for 123456789012.dkr.ecr.us-east-1.amazonaws.com failed' in str(excinfo.value)
+    assert any('Logging in to Docker registry' in msg for msg in messages)
 
 
 def test_pull_image_failure_is_non_fatal(monkeypatch):
