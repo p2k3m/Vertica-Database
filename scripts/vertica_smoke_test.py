@@ -748,7 +748,56 @@ def _compose_file() -> Optional[Path]:
 
     return _reconstruct_compose_file_from_user_data()
 
-    return None
+
+def _remove_stale_vertica_container() -> bool:
+    """Attempt to remove a stale ``vertica_ce`` container if present."""
+
+    try:
+        presence_check = subprocess.run(
+            [
+                'docker',
+                'ps',
+                '--all',
+                '--filter',
+                'name=^/vertica_ce$',
+                '--format',
+                '{{.ID}}',
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is unavailable while checking for stale Vertica containers')
+        return False
+
+    if presence_check.returncode != 0:
+        if presence_check.stderr:
+            log(f'[stderr] {presence_check.stderr.rstrip()}')
+        return False
+
+    container_ids = [line.strip() for line in presence_check.stdout.splitlines() if line.strip()]
+    if not container_ids:
+        return False
+
+    log('Removing stale Vertica container vertica_ce to resolve docker compose conflict')
+
+    removal = subprocess.run(
+        ['docker', 'rm', '-f', 'vertica_ce'],
+        capture_output=True,
+        text=True,
+    )
+
+    if removal.stdout:
+        log(removal.stdout.rstrip())
+    if removal.stderr:
+        log(f'[stderr] {removal.stderr.rstrip()}')
+
+    if removal.returncode != 0:
+        log('Failed to remove stale Vertica container vertica_ce')
+        return False
+
+    log('Removed stale Vertica container vertica_ce')
+    return True
 
 
 def _compose_up(compose_file: Path, *, force_recreate: bool = False) -> None:
@@ -772,14 +821,21 @@ def _compose_up(compose_file: Path, *, force_recreate: bool = False) -> None:
         raise SystemExit('Docker Compose CLI is not available to manage Vertica container')
 
     last_error: Optional[BaseException] = None
+    removal_attempted = False
+
     for command in commands:
-        try:
-            run_command(command)
-        except SystemExit as exc:
-            last_error = exc
-            continue
-        else:
-            return
+        while True:
+            try:
+                run_command(command)
+            except SystemExit as exc:
+                last_error = exc
+                if not removal_attempted and _remove_stale_vertica_container():
+                    removal_attempted = True
+                    log('Retrying docker compose after removing stale Vertica container')
+                    continue
+                break
+            else:
+                return
 
     if last_error is not None:
         raise last_error
