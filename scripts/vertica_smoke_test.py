@@ -122,34 +122,50 @@ def _sanitize_vertica_data_directories() -> None:
         _ensure_directory(vertica_root)
 
         config_path = vertica_root / 'config'
-        if config_path.exists() and config_path.is_symlink():
-            try:
-                target = os.readlink(config_path)
-            except OSError as exc:
-                log(f'Unable to inspect symlink {config_path}: {exc}')
-            else:
-                remove_symlink = False
-                if target.startswith('/data') or target.startswith('data'):
-                    remove_symlink = True
+        if config_path.exists():
+            if config_path.is_symlink():
+                try:
+                    target = os.readlink(config_path)
+                except OSError as exc:
+                    log(f'Unable to inspect symlink {config_path}: {exc}')
                 else:
-                    try:
-                        if os.path.isabs(target):
-                            resolved_target = Path(target).resolve()
-                        else:
-                            resolved_target = (config_path.parent / target).resolve()
-                    except FileNotFoundError:
-                        resolved_target = None
-
-                    if resolved_target and resolved_target == Path('/opt/vertica/config'):
+                    remove_symlink = False
+                    if target.startswith('/data') or target.startswith('data'):
                         remove_symlink = True
+                    else:
+                        try:
+                            if os.path.isabs(target):
+                                resolved_target = Path(target).resolve()
+                            else:
+                                resolved_target = (config_path.parent / target).resolve()
+                        except FileNotFoundError:
+                            resolved_target = None
 
-                if remove_symlink:
+                        if resolved_target and resolved_target == Path('/opt/vertica/config'):
+                            remove_symlink = True
+
+                    if remove_symlink:
+                        log(
+                            f'Removing confusing symlink {config_path} -> {target} '
+                            'to allow Vertica to recreate configuration files'
+                        )
+                        try:
+                            config_path.unlink()
+                        except OSError as exc:
+                            log(f'Unable to remove {config_path}: {exc}')
+                        else:
+                            continue
+
+            if config_path.exists() and config_path.is_dir():
+                admintools_conf = config_path / 'admintools.conf'
+                if not admintools_conf.exists():
                     log(
-                        f'Removing confusing symlink {config_path} -> {target} '
-                        'to allow Vertica to recreate configuration files'
+                        'Removing incomplete Vertica configuration directory '
+                        f'at {config_path} (admintools.conf missing) to allow '
+                        'Vertica to rebuild it during startup'
                     )
                     try:
-                        config_path.unlink()
+                        shutil.rmtree(config_path)
                     except OSError as exc:
                         log(f'Unable to remove {config_path}: {exc}')
 
