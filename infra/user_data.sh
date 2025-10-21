@@ -143,7 +143,7 @@ services:
     restart: always
     ports: ["${vertica_port}:${vertica_port}"]
     healthcheck:
-      test: ["CMD-SHELL", "/opt/vertica/bin/vsql -h localhost -p ${vertica_port} -d ${vertica_db_name} -U ${bootstrap_admin_username} -w \"${bootstrap_admin_password}\" -c 'SELECT 1' || exit 1"]
+      test: ["CMD-SHELL", "/opt/vertica/bin/vsql -h 127.0.0.1 -p ${vertica_port} -d ${vertica_db_name} -U ${bootstrap_admin_username} -w \"${bootstrap_admin_password}\" -c 'SELECT 1' || exit 1"]
       interval: 30s
       timeout: 15s
       retries: 5
