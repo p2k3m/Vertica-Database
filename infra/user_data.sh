@@ -159,12 +159,12 @@ services:
 YAML
 
 mkdir -p /var/lib/vertica
-# The Vertica container runs as the "dbadmin" user (uid/gid 500) and needs to
-# manage the contents of the mounted data directory. Ensure the directory is
-# owned by that user so that startup scripts can create files and adjust
-# permissions within the volume.
-chown 500:500 /var/lib/vertica
-chmod 770 /var/lib/vertica
+# The Vertica container historically ran as the "dbadmin" user (uid/gid 500),
+# but newer releases may use a different UID/GID. Relax the ownership
+# assumption and ensure the directory is writable by whatever user the
+# container starts as.
+chown 500:500 /var/lib/vertica || true
+chmod 777 /var/lib/vertica
 
 # Ensure the Vertica image is available locally before starting the service
 if ! docker pull "$VERTICA_IMAGE"; then
