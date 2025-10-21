@@ -202,6 +202,65 @@ def test_seed_default_admintools_conf_is_idempotent(tmp_path, monkeypatch):
     assert existing.read_text() == 'custom'
 
 
+def test_ensure_container_admintools_conf_readable_adjusts(monkeypatch):
+    logs: list[str] = []
+    calls: list[list[str]] = []
+
+    def fake_log(message: str) -> None:
+        logs.append(message)
+
+    def fake_which(name: str) -> Optional[str]:
+        return '/usr/bin/docker' if name == 'docker' else None
+
+    def fake_run(command, capture_output=True, text=True):
+        calls.append(command)
+        script = command[-1]
+        if 'test -e' in script:
+            return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+        if 'test -r' in script:
+            return subprocess.CompletedProcess(command, 1, stdout='', stderr='')
+        if 'chmod' in script:
+            return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+        raise AssertionError(f'Unexpected command: {command}')
+
+    monkeypatch.setattr(smoke, 'log', fake_log)
+    monkeypatch.setattr(smoke.shutil, 'which', fake_which)
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    adjusted = smoke._ensure_container_admintools_conf_readable('vertica_ce')
+
+    assert adjusted is True
+    assert any('Detected unreadable admintools.conf' in entry for entry in logs)
+    assert any('chmod a+r' in cmd[-1] for cmd in calls)
+
+
+def test_ensure_container_admintools_conf_readable_noop(monkeypatch):
+    logs: list[str] = []
+
+    def fake_log(message: str) -> None:
+        logs.append(message)
+
+    def fake_which(name: str) -> Optional[str]:
+        return '/usr/bin/docker' if name == 'docker' else None
+
+    def fake_run(command, capture_output=True, text=True):
+        script = command[-1]
+        if 'test -e' in script:
+            return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+        if 'test -r' in script:
+            return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+        raise AssertionError(f'Unexpected command: {command}')
+
+    monkeypatch.setattr(smoke, 'log', fake_log)
+    monkeypatch.setattr(smoke.shutil, 'which', fake_which)
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    adjusted = smoke._ensure_container_admintools_conf_readable('vertica_ce')
+
+    assert adjusted is False
+    assert not any('Detected unreadable admintools.conf' in entry for entry in logs)
+
+
 def test_connect_and_query_prefers_tls(monkeypatch):
     captured_config: dict[str, object] = {}
 
