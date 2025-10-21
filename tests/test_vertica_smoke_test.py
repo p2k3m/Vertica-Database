@@ -121,7 +121,7 @@ def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
     assert not calls
 
 
-def test_connect_and_query_disables_tls(monkeypatch):
+def test_connect_and_query_prefers_tls(monkeypatch):
     captured_config: dict[str, object] = {}
 
     class FakeConnection:
@@ -149,7 +149,39 @@ def test_connect_and_query_disables_tls(monkeypatch):
 
     assert smoke.connect_and_query('label', 'host', 'user', 'password', attempts=1, delay=0)
 
-    assert captured_config['tlsmode'] == 'disable'
+    assert captured_config['tlsmode'] == 'prefer'
+
+
+def test_connect_and_query_respects_env_tlsmode(monkeypatch):
+    captured_config: dict[str, object] = {}
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            class Cursor:
+                def execute(self, query):
+                    return None
+
+                def fetchone(self):
+                    return (1,)
+
+            return Cursor()
+
+    def fake_connect(**config):
+        captured_config.update(config)
+        return FakeConnection()
+
+    monkeypatch.setenv('VERTICA_TLSMODE', 'require')
+    monkeypatch.setattr(smoke, 'vertica_python', type('Module', (), {'connect': fake_connect}))
+
+    assert smoke.connect_and_query('label', 'host', 'user', 'password', attempts=1, delay=0)
+
+    assert captured_config['tlsmode'] == 'require'
 
 
 def test_connect_and_query_nonfatal(monkeypatch):
