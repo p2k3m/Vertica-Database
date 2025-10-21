@@ -188,6 +188,7 @@ def test_seed_default_admintools_conf(tmp_path, monkeypatch):
     content = conf_path.read_text()
     assert '[Configuration]' in content
     assert 'admintools_config_version = 110' in content
+    assert conf_path.stat().st_mode & 0o777 == 0o666
 
 
 def test_seed_default_admintools_conf_is_idempotent(tmp_path, monkeypatch):

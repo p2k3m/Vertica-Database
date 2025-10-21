@@ -63,6 +63,9 @@ def _quote_identifier(identifier: str) -> str:
 _METADATA_TOKEN: Optional[str] = None
 
 VERTICA_DATA_DIRECTORIES = [Path('/var/lib/vertica')]
+# Vertica container images have historically run as uid/gid 500, but newer builds
+# may choose a different runtime identity. Use permissive modes rather than
+# forcing ownership so that any future uid/gid changes continue to work.
 _VERTICA_DATA_DIR_MODE = 0o777
 
 DEFAULT_ADMINTOOLS_CONF = textwrap.dedent(
@@ -124,13 +127,6 @@ def _ensure_directory(path: Path) -> bool:
         os.chmod(path, _VERTICA_DATA_DIR_MODE)
     except OSError as exc:
         log(f'Unable to adjust permissions on {path}: {exc}')
-
-    try:
-        os.chown(path, 500, 500)
-    except PermissionError:
-        log(f'Insufficient privileges to change ownership of {path}; continuing')
-    except OSError as exc:
-        log(f'Unable to adjust ownership of {path}: {exc}')
 
     return True
 
@@ -320,19 +316,12 @@ def _seed_default_admintools_conf(config_dir: Path) -> None:
         return
 
     try:
-        os.chmod(admintools_conf, 0o660)
+        os.chmod(admintools_conf, 0o666)
     except OSError as exc:
-        log(f'Unable to adjust permissions on {admintools_conf}: {exc}')
-
-    try:
-        os.chown(admintools_conf, 500, 500)
-    except PermissionError:
         log(
-            'Insufficient privileges to change ownership of '
-            f'{admintools_conf}; continuing'
+            'Unable to relax permissions on '
+            f'{admintools_conf}: {exc}'
         )
-    except OSError as exc:
-        log(f'Unable to adjust ownership of {admintools_conf}: {exc}')
 
 
 def _reset_vertica_data_directories() -> bool:
