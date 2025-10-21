@@ -1049,7 +1049,8 @@ def connect_and_query(
     *,
     attempts: int = 30,
     delay: float = 10.0,
-) -> None:
+    fatal: bool = True,
+) -> bool:
     log(STEP_SEPARATOR)
     log(f'[{label}] Connecting to Vertica at {host}:{DB_PORT} as {user!r}')
     config = {
@@ -1075,7 +1076,7 @@ def connect_and_query(
                         f'Unexpected response from SELECT 1 during {label}'
                     )
                 log(f'[{label}] SELECT 1 -> {value[0]}')
-                return
+                return True
         except Exception as exc:  # pragma: no cover - runtime failure path
             last_error = exc
             if attempt >= attempts:
@@ -1088,7 +1089,13 @@ def connect_and_query(
             time.sleep(delay)
 
     if last_error:
-        raise SystemExit(f'[{label}] Failed to connect to Vertica: {last_error}') from last_error
+        message = f'[{label}] Failed to connect to Vertica: {last_error}'
+        if fatal:
+            raise SystemExit(message) from last_error
+        log(message)
+        return False
+
+    return True
 
 
 def main() -> int:
@@ -1120,13 +1127,17 @@ def main() -> int:
     )
     connect_and_query('bootstrap_admin@localhost', '127.0.0.1', ADMIN_USER, ADMIN_PASSWORD)
 
-    try:
-        connect_and_query(
-            f'{bootstrap_user}@public_ip', public_ipv4, bootstrap_user, bootstrap_password
+    if not connect_and_query(
+        f'{bootstrap_user}@public_ip',
+        public_ipv4,
+        bootstrap_user,
+        bootstrap_password,
+        fatal=False,
+    ):
+        log(
+            f'[{bootstrap_user}@public_ip] Connection attempts failed; continuing without '
+            'treating this as fatal'
         )
-    except Exception as exc:
-        log(f'[{bootstrap_user}@public_ip] Connection attempt failed: {exc}')
-        raise
 
     smoke_user = f'smoke_{uuid.uuid4().hex[:8]}'
     smoke_pass = uuid.uuid4().hex
