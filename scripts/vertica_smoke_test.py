@@ -94,8 +94,10 @@ DEFAULT_ADMINTOOLS_CONF = textwrap.dedent(
         thread_timeout = 1200
 
     [Cluster]
+        hosts = 127.0.0.1
 
     [Nodes]
+        node0001 = 127.0.0.1
 
     [SSHConfig]
         ssh_user =
