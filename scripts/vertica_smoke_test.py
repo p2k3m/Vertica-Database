@@ -159,15 +159,27 @@ def _sanitize_vertica_data_directories() -> None:
             if config_path.exists() and config_path.is_dir():
                 admintools_conf = config_path / 'admintools.conf'
                 if not admintools_conf.exists():
-                    log(
-                        'Removing incomplete Vertica configuration directory '
-                        f'at {config_path} (admintools.conf missing) to allow '
-                        'Vertica to rebuild it during startup'
+                    container_status = _docker_inspect(
+                        'vertica_ce', '{{.State.Status}}'
                     )
-                    try:
-                        shutil.rmtree(config_path)
-                    except OSError as exc:
-                        log(f'Unable to remove {config_path}: {exc}')
+                    if container_status in {'running', 'restarting'}:
+                        log(
+                            'Detected missing admintools.conf but Vertica '
+                            f'container is currently {container_status}; '
+                            'skipping directory removal to avoid disrupting '
+                            'the running container'
+                        )
+                    else:
+                        log(
+                            'Removing incomplete Vertica configuration '
+                            f'directory at {config_path} (admintools.conf '
+                            'missing) to allow Vertica to rebuild it during '
+                            'startup'
+                        )
+                        try:
+                            shutil.rmtree(config_path)
+                        except OSError as exc:
+                            log(f'Unable to remove {config_path}: {exc}')
 
         # When the Vertica container starts for the first time it populates the
         # ``config`` directory with critical bootstrap files such as
