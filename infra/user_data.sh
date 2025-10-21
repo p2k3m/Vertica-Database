@@ -11,9 +11,45 @@ else
   PKG_MGR=yum
 fi
 
-"$PKG_MGR" install -y amazon-ssm-agent awscli docker docker-compose-plugin jq nmap-ncat python3 python3-pip
+"$PKG_MGR" install -y amazon-ssm-agent awscli docker jq nmap-ncat python3 python3-pip
 "$PKG_MGR" update -y amazon-ssm-agent || true
 systemctl enable --now docker
+
+echo "[user-data] Waiting for docker daemon to become ready"
+docker_ready=0
+deadline=$((SECONDS + 180))
+while [ $SECONDS -lt $deadline ]; do
+  if docker info >/dev/null 2>&1; then
+    docker_ready=1
+    break
+  fi
+  sleep 3
+done
+
+if [ "${docker_ready:-0}" -ne 1 ]; then
+  echo "[user-data] docker daemon failed to report ready" >&2
+  journalctl -u docker.service --no-pager -n 200 || true
+  exit 1
+fi
+
+COMPOSE_VERSION="v2.29.7"
+COMPOSE_URL="https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64"
+COMPOSE_PLUGIN_DIR="/usr/libexec/docker/cli-plugins"
+COMPOSE_PLUGIN_PATH="$COMPOSE_PLUGIN_DIR/docker-compose"
+
+if ! docker compose version >/dev/null 2>&1; then
+  echo "[user-data] Installing docker compose plugin version ${COMPOSE_VERSION}"
+  install -d -m 0755 "$COMPOSE_PLUGIN_DIR"
+  curl -fsSL "$COMPOSE_URL" -o "$COMPOSE_PLUGIN_PATH"
+  chmod +x "$COMPOSE_PLUGIN_PATH"
+fi
+
+if ! command -v docker-compose >/dev/null 2>&1; then
+  install -d -m 0755 /usr/local/bin
+  ln -sf "$COMPOSE_PLUGIN_PATH" /usr/local/bin/docker-compose
+fi
+
+docker compose version
 
 # Configure the SSM agent before starting it so that registration succeeds reliably
 echo "[user-data] Configuring amazon-ssm-agent"
@@ -109,9 +145,9 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "/opt/vertica/bin/vsql -h localhost -p ${vertica_port} -d ${vertica_db_name} -U ${bootstrap_admin_username} -w \"${bootstrap_admin_password}\" -c 'SELECT 1' || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 5
-      start_period: 120s
+      start_period: 300s
     ulimits:
       nofile: { soft: 65536, hard: 65536 }
     volumes:
@@ -132,12 +168,6 @@ if ! docker pull "$VERTICA_IMAGE"; then
 fi
 
 # Start Vertica only
-curl -fsSL https://get.docker.com | sh || true
-if ! docker compose version >/dev/null 2>&1; then
-  curl -L https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
-  chmod +x /usr/local/bin/docker-compose
-fi
-
 (docker compose -f /opt/compose.remote.yml up -d) || (docker-compose -f /opt/compose.remote.yml up -d)
 
 # Wait for the Vertica container to accept connections on the database port

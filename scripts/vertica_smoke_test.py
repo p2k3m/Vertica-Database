@@ -112,6 +112,27 @@ def _docker_info() -> subprocess.CompletedProcess[str]:
     )
 
 
+def _wait_for_docker_daemon(
+    timeout_seconds: float = 180.0,
+    interval_seconds: float = 3.0,
+) -> tuple[bool, Optional[subprocess.CompletedProcess[str]]]:
+    """Wait for ``docker info`` to succeed within ``timeout_seconds``."""
+
+    deadline = time.monotonic() + max(timeout_seconds, 0.0)
+    last_result: Optional[subprocess.CompletedProcess[str]] = None
+
+    while time.monotonic() < deadline:
+        last_result = _docker_info()
+        if last_result.returncode == 0:
+            return True, last_result
+        time.sleep(interval_seconds)
+
+    if last_result is None:
+        last_result = _docker_info()
+
+    return last_result.returncode == 0, last_result
+
+
 def _attempt_install_docker() -> bool:
     """Try to install the Docker CLI using available package managers."""
 
@@ -171,21 +192,23 @@ def ensure_docker_service() -> None:
         if not _attempt_install_docker():
             raise SystemExit('Docker CLI is not available on the instance and installation failed')
 
-    info_result = _docker_info()
-    if info_result.returncode == 0:
+    ready, info_result = _wait_for_docker_daemon(timeout_seconds=30.0, interval_seconds=2.0)
+    if ready:
         return
 
     if shutil.which('systemctl') is None:
         log(STEP_SEPARATOR)
         log('Docker CLI found but daemon is unreachable and systemctl is unavailable')
+        if info_result.stdout:
+            log(info_result.stdout.rstrip())
         if info_result.stderr:
             log(f'[stderr] {info_result.stderr.rstrip()}')
         raise SystemExit('Unable to manage docker daemon without systemctl')
 
     log(STEP_SEPARATOR)
-    log('Docker daemon unavailable; attempting to start docker.service via systemctl')
+    log('Docker daemon unavailable; attempting to enable and start docker.service via systemctl')
     start_result = subprocess.run(
-        ['systemctl', 'start', 'docker'],
+        ['systemctl', 'enable', '--now', 'docker'],
         capture_output=True,
         text=True,
     )
@@ -207,18 +230,19 @@ def ensure_docker_service() -> None:
                     log(legacy_result.stdout.rstrip())
                 if legacy_result.stderr:
                     log(f'[stderr] {legacy_result.stderr.rstrip()}')
-            else:
-                info_result = _docker_info()
-                if info_result.returncode == 0:
-                    return
+                raise SystemExit('Unable to start docker daemon via service command')
+        else:
+            raise SystemExit('Unable to start docker daemon via systemctl')
 
-        raise SystemExit('Failed to start docker daemon')
+    ready, info_result = _wait_for_docker_daemon(timeout_seconds=180.0, interval_seconds=3.0)
+    if ready:
+        return
 
-    info_result = _docker_info()
-    if info_result.returncode != 0:
-        if info_result.stderr:
-            log(f'[stderr] {info_result.stderr.rstrip()}')
-        raise SystemExit('Docker daemon did not become available after start attempt')
+    if info_result and info_result.stdout:
+        log(info_result.stdout.rstrip())
+    if info_result and info_result.stderr:
+        log(f'[stderr] {info_result.stderr.rstrip()}')
+    raise SystemExit('Docker daemon did not start successfully')
 
 
 def _docker_inspect(container: str, template: str) -> Optional[str]:
@@ -336,7 +360,12 @@ def _docker_compose_plugin_available() -> bool:
 def _ensure_docker_compose_cli() -> None:
     """Ensure that either ``docker compose`` or ``docker-compose`` is available."""
 
+    compose_version = 'v2.29.7'
+
     if _docker_compose_plugin_available() or shutil.which('docker-compose') is not None:
+        return
+
+    if _install_docker_compose_plugin(compose_version):
         return
 
     log(STEP_SEPARATOR)
@@ -380,15 +409,18 @@ def _ensure_docker_compose_cli() -> None:
         if _docker_compose_plugin_available() or shutil.which('docker-compose') is not None:
             return
 
-    if _download_docker_compose_binary():
+    if _install_docker_compose_plugin(compose_version):
+        return
+
+    if _download_docker_compose_binary(version=compose_version):
         return
 
     if not (_docker_compose_plugin_available() or shutil.which('docker-compose') is not None):
         raise SystemExit('Docker Compose CLI is not available after installation attempts')
 
 
-def _download_docker_compose_binary(version: str = 'v2.27.1') -> bool:
-    """Attempt to download the standalone Docker Compose binary as a fallback."""
+def _download_compose_binary(destination: Path, version: str) -> bool:
+    """Download a Docker Compose binary to ``destination``."""
 
     system = sys.platform
     if not system.startswith('linux'):
@@ -411,7 +443,6 @@ def _download_docker_compose_binary(version: str = 'v2.27.1') -> bool:
         'https://github.com/docker/compose/releases/download/'
         f'{version}/docker-compose-linux-{mapped_arch}'
     )
-    destination = Path('/usr/local/bin/docker-compose')
 
     log(STEP_SEPARATOR)
     log(f'Attempting to download Docker Compose binary from {url}')
@@ -431,12 +462,44 @@ def _download_docker_compose_binary(version: str = 'v2.27.1') -> bool:
         log(f'Failed to write Docker Compose binary to {destination}: {exc}')
         return False
 
-    if shutil.which('docker-compose') is None:
-        log('Docker Compose binary download completed but command is still unavailable')
-        return False
-
-    log('Docker Compose binary installed successfully')
     return True
+
+
+def _download_docker_compose_binary(version: str = 'v2.29.7') -> bool:
+    """Attempt to download the standalone Docker Compose binary as a fallback."""
+
+    destination = Path('/usr/local/bin/docker-compose')
+    if _download_compose_binary(destination, version):
+        if shutil.which('docker-compose') is None:
+            log('Docker Compose binary download completed but command is still unavailable')
+            return False
+
+        log('Docker Compose binary installed successfully')
+        return True
+
+    return False
+
+
+def _install_docker_compose_plugin(version: str = 'v2.29.7') -> bool:
+    """Install the Docker Compose CLI plugin if possible."""
+
+    plugin_dir = Path('/usr/libexec/docker/cli-plugins')
+    plugin_path = plugin_dir / 'docker-compose'
+
+    if _download_compose_binary(plugin_path, version):
+        if shutil.which('docker-compose') is None:
+            fallback_path = Path('/usr/local/bin/docker-compose')
+            try:
+                fallback_path.parent.mkdir(parents=True, exist_ok=True)
+                if fallback_path.exists() or fallback_path.is_symlink():
+                    fallback_path.unlink()
+                fallback_path.symlink_to(plugin_path)
+            except OSError as exc:
+                log(f'Unable to create docker-compose symlink: {exc}')
+
+        return _docker_compose_plugin_available() or shutil.which('docker-compose') is not None
+
+    return False
 
 
 _COMPOSE_FILE_CANDIDATES = [
