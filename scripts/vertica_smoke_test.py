@@ -1,3 +1,4 @@
+import configparser
 import json
 import os
 import platform
@@ -300,7 +301,13 @@ def _seed_default_admintools_conf(config_dir: Path) -> None:
 
     admintools_conf = config_dir / 'admintools.conf'
     if admintools_conf.exists():
-        return
+        if _admintools_conf_needs_rebuild(admintools_conf):
+            log(
+                'Existing admintools.conf is missing critical configuration; '
+                'attempting to rebuild it with safe defaults'
+            )
+        else:
+            return
 
     if config_dir.exists() and config_dir.is_symlink():
         try:
@@ -325,6 +332,36 @@ def _seed_default_admintools_conf(config_dir: Path) -> None:
             'Unable to relax permissions on '
             f'{admintools_conf}: {exc}'
         )
+
+
+def _admintools_conf_needs_rebuild(admintools_conf: Path) -> bool:
+    """Return ``True`` when ``admintools_conf`` lacks critical configuration."""
+
+    parser = configparser.ConfigParser()
+    try:
+        with admintools_conf.open('r') as stream:
+            parser.read_file(stream)
+    except (OSError, configparser.Error) as exc:
+        log(f'Unable to parse existing admintools.conf ({admintools_conf}): {exc}')
+        return True
+
+    # ``admintools`` requires that the ``Cluster`` section provides a ``hosts``
+    # value describing the node topology.  When this setting is missing the
+    # Vertica container exits repeatedly during bootstrap which ultimately
+    # leaves the Docker health check in an unhealthy state.  Treat the file as
+    # corrupt so we can replace it with a known-good default.
+    if not parser.has_section('Cluster') or not parser.has_option('Cluster', 'hosts'):
+        return True
+
+    # Ensure the Nodes section at least contains an entry for the first node so
+    # the management tools can discover the primary address.
+    if not parser.has_section('Nodes'):
+        return True
+
+    if not parser.has_option('Nodes', 'node0001'):
+        return True
+
+    return False
 
 
 def _ensure_container_admintools_conf_readable(container: str) -> bool:
