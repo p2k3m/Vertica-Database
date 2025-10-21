@@ -147,7 +147,7 @@ services:
       interval: 30s
       timeout: 15s
       retries: 5
-      start_period: 300s
+      start_period: 900s
     ulimits:
       nofile: { soft: 65536, hard: 65536 }
     volumes:
