@@ -122,6 +122,59 @@ def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
     assert not calls
 
 
+def test_ensure_vertica_resets_data_directories(monkeypatch):
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    def fake_sleep(seconds: float) -> None:
+        current_time['value'] += seconds
+
+    compose_calls: list[bool] = []
+    reset_calls: list[bool] = []
+
+    def fake_run_command(command: list[str]) -> None:
+        if command[:2] == ['docker', 'restart']:
+            return
+        raise AssertionError(f'Unexpected command: {command}')
+
+    def fake_docker_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return 'healthy' if reset_calls else 'unhealthy'
+        raise AssertionError(f'Unexpected template: {template}')
+
+    def fake_compose_up(path: Path, force_recreate: bool = False) -> None:
+        compose_calls.append(force_recreate)
+
+    def fake_reset() -> bool:
+        reset_calls.append(True)
+        return True
+
+    monkeypatch.setattr(smoke, '_ensure_docker_compose_cli', lambda: None)
+    monkeypatch.setattr(smoke, '_compose_file', lambda: Path('compose.yaml'))
+    monkeypatch.setattr(smoke, '_ensure_ecr_login_if_needed', lambda path: None)
+    monkeypatch.setattr(smoke, '_compose_up', fake_compose_up)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 1000.0)
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_docker_inspect)
+    monkeypatch.setattr(smoke, '_reset_vertica_data_directories', fake_reset)
+    monkeypatch.setattr(smoke, '_sanitize_vertica_data_directories', lambda: None)
+    monkeypatch.setattr(smoke, '_log_container_tail', lambda container, tail=200: None)
+    monkeypatch.setattr(smoke, '_log_health_log_entries', lambda container, count: count)
+    monkeypatch.setattr(smoke, 'run_command', fake_run_command)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', fake_sleep)
+    monkeypatch.setattr(smoke, 'UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS', 15.0)
+
+    smoke.ensure_vertica_container_running(timeout=1000.0, compose_timeout=0.0)
+
+    assert compose_calls == [True, True, True]
+    assert reset_calls == [True]
+
+
 def test_connect_and_query_prefers_tls(monkeypatch):
     captured_config: dict[str, object] = {}
 

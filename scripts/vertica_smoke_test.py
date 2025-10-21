@@ -181,6 +181,32 @@ def _sanitize_vertica_data_directories() -> None:
             _ensure_directory(config_path)
 
 
+def _reset_vertica_data_directories() -> bool:
+    """Remove Vertica data directories to allow a clean container bootstrap."""
+
+    log(STEP_SEPARATOR)
+    log('Attempting to reset Vertica data directories for a clean bootstrap')
+
+    removed_any = False
+
+    for base_path in VERTICA_DATA_DIRECTORIES:
+        vertica_root = base_path / 'vertica'
+        if not vertica_root.exists():
+            continue
+
+        log(f'Removing Vertica data directory at {vertica_root}')
+        try:
+            shutil.rmtree(vertica_root)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            log(f'Unable to remove {vertica_root}: {exc}')
+        else:
+            removed_any = True
+
+    return removed_any
+
+
 def get_metadata_token(timeout: float = 2.0) -> Optional[str]:
     """Return an IMDSv2 session token, or None if the token endpoint is unavailable."""
 
@@ -1193,6 +1219,7 @@ def ensure_vertica_container_running(
 
     restart_attempts = 0
     recreate_attempts = 0
+    data_reset_attempted = False
     unhealthy_observed_at: Optional[float] = None
     unhealthy_logged_duration: Optional[float] = None
     health_log_count = 0
@@ -1325,6 +1352,25 @@ def ensure_vertica_container_running(
                 unhealthy_logged_duration = None
                 last_unhealthy_log_dump = None
                 continue
+
+            if not data_reset_attempted:
+                data_reset_attempted = True
+                if compose_file is None:
+                    compose_file = _compose_file()
+                if _reset_vertica_data_directories():
+                    log('Vertica data directories reset; re-running bootstrap sequence')
+                    _sanitize_vertica_data_directories()
+                    restart_attempts = 0
+                    recreate_attempts = 0
+                    unhealthy_observed_at = None
+                    unhealthy_logged_duration = None
+                    last_unhealthy_log_dump = None
+                    if compose_file is not None:
+                        _ensure_ecr_login_if_needed(compose_file)
+                        _compose_up(compose_file, force_recreate=True)
+                    time.sleep(15)
+                    continue
+                log('Failed to reset Vertica data directories or nothing to reset')
 
             log('Vertica container is still unhealthy after recovery attempts; collecting diagnostics')
             try:
