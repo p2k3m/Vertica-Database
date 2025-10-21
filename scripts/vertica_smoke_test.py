@@ -1104,6 +1104,18 @@ def _ensure_primary_admin_user(
             cursor.execute(statement)
 
 
+def _resolve_tlsmode() -> str:
+    """Determine the TLS mode to use for Vertica connections."""
+
+    for key in ("VERTICA_TLSMODE", "DB_TLSMODE"):
+        value = os.getenv(key)
+        if value:
+            stripped = value.strip()
+            if stripped:
+                return stripped
+    return "prefer"
+
+
 def connect_and_query(
     label: str,
     host: str,
@@ -1123,7 +1135,7 @@ def connect_and_query(
         'password': password,
         'database': DB_NAME,
         'autocommit': True,
-        'tlsmode': 'disable',
+        'tlsmode': _resolve_tlsmode(),
     }
 
     last_error: Optional[BaseException] = None
