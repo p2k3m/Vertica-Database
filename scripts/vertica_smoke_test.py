@@ -7,6 +7,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import textwrap
 import time
 import uuid
 from datetime import datetime, timezone
@@ -63,6 +64,45 @@ _METADATA_TOKEN: Optional[str] = None
 
 VERTICA_DATA_DIRECTORIES = [Path('/var/lib/vertica')]
 _VERTICA_DATA_DIR_MODE = 0o777
+
+DEFAULT_ADMINTOOLS_CONF = textwrap.dedent(
+    """
+    [Configuration]
+        format = 3
+        install_opts =
+        default_base = /home/dbadmin
+        controlmode = pt2pt
+        controlsubnet = default
+        spreadlog = False
+        last_port = 5433
+        tmp_dir = /tmp
+        atdebug = False
+        atgui_default_license = False
+        unreachable_host_caching = True
+        aws_metadata_conn_timeout = 2
+        rebalance_shards_timeout = 36000
+        database_state_change_poll_timeout = 21600
+        wait_for_shutdown_timeout = 3600
+        pexpect_verbose_logging = False
+        sync_catalog_retries = 2000
+        client_connect_timeout_sec = 5.0
+        admintools_config_version = 110
+        thread_timeout = 1200
+
+    [Cluster]
+
+    [Nodes]
+
+    [SSHConfig]
+        ssh_user =
+        ssh_ident =
+        ssh_options = -oConnectTimeout=30 -o TCPKeepAlive=no -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o StrictHostKeyChecking=no -o BatchMode=yes
+
+    [BootstrapParameters]
+        awsendpoint = null
+        awsregion = null
+    """
+).strip() + "\n"
 
 
 def _ensure_directory(path: Path) -> bool:
@@ -240,6 +280,7 @@ def _sanitize_vertica_data_directories() -> None:
                             log(f'Unable to remove {vertica_root}: {exc}')
                         else:
                             _ensure_directory(vertica_root)
+                            _seed_default_admintools_conf(vertica_root / 'config')
                         continue
 
         # When the Vertica container starts for the first time it populates the
@@ -252,6 +293,46 @@ def _sanitize_vertica_data_directories() -> None:
         # startup.
         if config_path.exists():
             _ensure_directory(config_path)
+            _seed_default_admintools_conf(config_path)
+
+
+def _seed_default_admintools_conf(config_dir: Path) -> None:
+    """Ensure ``admintools.conf`` exists with safe defaults."""
+
+    admintools_conf = config_dir / 'admintools.conf'
+    if admintools_conf.exists():
+        return
+
+    if config_dir.exists() and config_dir.is_symlink():
+        try:
+            config_dir.unlink()
+        except OSError as exc:
+            log(f'Unable to remove symlinked config directory {config_dir}: {exc}')
+            return
+
+    if not _ensure_directory(config_dir):
+        return
+
+    try:
+        admintools_conf.write_text(DEFAULT_ADMINTOOLS_CONF)
+    except OSError as exc:
+        log(f'Unable to write default admintools.conf at {admintools_conf}: {exc}')
+        return
+
+    try:
+        os.chmod(admintools_conf, 0o660)
+    except OSError as exc:
+        log(f'Unable to adjust permissions on {admintools_conf}: {exc}')
+
+    try:
+        os.chown(admintools_conf, 500, 500)
+    except PermissionError:
+        log(
+            'Insufficient privileges to change ownership of '
+            f'{admintools_conf}; continuing'
+        )
+    except OSError as exc:
+        log(f'Unable to adjust ownership of {admintools_conf}: {exc}')
 
 
 def _reset_vertica_data_directories() -> bool:

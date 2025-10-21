@@ -175,6 +175,32 @@ def test_ensure_vertica_resets_data_directories(monkeypatch):
     assert reset_calls == [True]
 
 
+def test_seed_default_admintools_conf(tmp_path, monkeypatch):
+    logs: list[str] = []
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+
+    config_dir = tmp_path / 'config'
+    smoke._seed_default_admintools_conf(config_dir)
+
+    conf_path = config_dir / 'admintools.conf'
+    assert conf_path.exists()
+    content = conf_path.read_text()
+    assert '[Configuration]' in content
+    assert 'admintools_config_version = 110' in content
+
+
+def test_seed_default_admintools_conf_is_idempotent(tmp_path, monkeypatch):
+    config_dir = tmp_path / 'config'
+    config_dir.mkdir()
+    existing = config_dir / 'admintools.conf'
+    existing.write_text('custom')
+
+    smoke._seed_default_admintools_conf(config_dir)
+
+    assert existing.read_text() == 'custom'
+
+
 def test_connect_and_query_prefers_tls(monkeypatch):
     captured_config: dict[str, object] = {}
 
