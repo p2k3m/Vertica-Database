@@ -1047,7 +1047,7 @@ def connect_and_query(
     user: str,
     password: str,
     *,
-    attempts: int = 12,
+    attempts: int = 30,
     delay: float = 10.0,
 ) -> None:
     log(STEP_SEPARATOR)
