@@ -162,20 +162,38 @@ def _sanitize_vertica_data_directories() -> None:
                     container_status = _docker_inspect(
                         'vertica_ce', '{{.State.Status}}'
                     )
-                    if container_status in {'running', 'restarting'}:
+                    container_health = _docker_inspect(
+                        'vertica_ce', '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
+                    )
+                    should_preserve = (
+                        container_status in {'running', 'restarting'}
+                        and container_health == 'healthy'
+                    )
+
+                    if should_preserve:
                         log(
                             'Detected missing admintools.conf but Vertica '
-                            f'container is currently {container_status}; '
-                            'skipping directory removal to avoid disrupting '
-                            'the running container'
+                            f'container is currently {container_status} '
+                            '(healthy); skipping directory removal to avoid '
+                            'disrupting the running container'
                         )
                     else:
-                        log(
-                            'Removing incomplete Vertica configuration '
-                            f'directory at {config_path} (admintools.conf '
-                            'missing) to allow Vertica to rebuild it during '
-                            'startup'
-                        )
+                        if container_status in {'running', 'restarting'}:
+                            health_display = container_health or '<unknown>'
+                            log(
+                                'Detected missing admintools.conf while '
+                                f'container status is {container_status} with '
+                                f'health {health_display}; removing incomplete '
+                                'configuration to allow Vertica to rebuild it '
+                                'during startup'
+                            )
+                        else:
+                            log(
+                                'Removing incomplete Vertica configuration '
+                                f'directory at {config_path} (admintools.conf '
+                                'missing) to allow Vertica to rebuild it during '
+                                'startup'
+                            )
                         try:
                             shutil.rmtree(config_path)
                         except OSError as exc:
