@@ -1,5 +1,6 @@
 import importlib
 import os
+import subprocess
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -149,3 +150,69 @@ def test_connect_and_query_disables_tls(monkeypatch):
     smoke.connect_and_query('label', 'host', 'user', 'password', attempts=1, delay=0)
 
     assert captured_config['tlsmode'] == 'disable'
+
+
+def test_ecr_login_handles_aws_cli_failure(monkeypatch):
+    messages: list[str] = []
+
+    def fake_log(message: str) -> None:
+        messages.append(message)
+
+    def fake_run_aws_cli(args):
+        raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(smoke, 'log', fake_log)
+    monkeypatch.setattr(smoke, '_run_aws_cli', fake_run_aws_cli)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda name: '/usr/bin/aws' if name == 'aws' else None)
+    smoke._ECR_LOGIN_RESULTS.clear()
+
+    result = smoke._ensure_ecr_login_for_image(
+        '123456789012.dkr.ecr.us-east-1.amazonaws.com/repo:tag'
+    )
+
+    assert result is False
+    assert any('Failed to retrieve ECR login password' in msg for msg in messages)
+
+
+def test_ecr_login_handles_docker_login_failure(monkeypatch):
+    messages: list[str] = []
+
+    def fake_log(message: str) -> None:
+        messages.append(message)
+
+    def fake_run_aws_cli(args):
+        return subprocess.CompletedProcess(args, 0, stdout='token', stderr='')
+
+    def fake_subprocess_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1, stdout='', stderr='error')
+
+    monkeypatch.setattr(smoke, 'log', fake_log)
+    monkeypatch.setattr(smoke, '_run_aws_cli', fake_run_aws_cli)
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_subprocess_run)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda name: '/usr/bin/aws' if name == 'aws' else None)
+    smoke._ECR_LOGIN_RESULTS.clear()
+
+    result = smoke._ensure_ecr_login_for_image(
+        '123456789012.dkr.ecr.us-east-1.amazonaws.com/repo:tag'
+    )
+
+    assert result is False
+    assert any('Docker login for 123456789012.dkr.ecr.us-east-1.amazonaws.com failed' in msg for msg in messages)
+
+
+def test_pull_image_failure_is_non_fatal(monkeypatch):
+    messages: list[str] = []
+
+    def fake_log(message: str) -> None:
+        messages.append(message)
+
+    def failing_run_command(command):
+        raise SystemExit('Command failed with exit code 1')
+
+    monkeypatch.setattr(smoke, 'log', fake_log)
+    monkeypatch.setattr(smoke, 'run_command', failing_run_command)
+    smoke._ECR_LOGIN_RESULTS.clear()
+
+    smoke._pull_image_if_possible('my-image:latest')
+
+    assert any('Docker pull for my-image:latest failed' in msg for msg in messages)
