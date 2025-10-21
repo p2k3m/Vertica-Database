@@ -128,9 +128,24 @@ def _sanitize_vertica_data_directories() -> None:
             except OSError as exc:
                 log(f'Unable to inspect symlink {config_path}: {exc}')
             else:
+                remove_symlink = False
                 if target.startswith('/data') or target.startswith('data'):
+                    remove_symlink = True
+                else:
+                    try:
+                        if os.path.isabs(target):
+                            resolved_target = Path(target).resolve()
+                        else:
+                            resolved_target = (config_path.parent / target).resolve()
+                    except FileNotFoundError:
+                        resolved_target = None
+
+                    if resolved_target and resolved_target == Path('/opt/vertica/config'):
+                        remove_symlink = True
+
+                if remove_symlink:
                     log(
-                        f'Removing recursive symlink {config_path} -> {target} '
+                        f'Removing confusing symlink {config_path} -> {target} '
                         'to allow Vertica to recreate configuration files'
                     )
                     try:
