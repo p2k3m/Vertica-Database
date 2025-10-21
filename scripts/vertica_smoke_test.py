@@ -19,8 +19,7 @@ import vertica_python
 
 DB_NAME = 'VMart'
 DB_PORT = 5433
-DBADMIN_USER = 'dbadmin'
-DBADMIN_PASSWORD = ''
+BOOTSTRAP_ADMIN_DEFAULT_USER = 'dbadmin'
 ADMIN_USER = os.environ['ADMIN_USER']
 ADMIN_PASSWORD = os.environ['ADMIN_PASSWORD']
 
@@ -228,6 +227,35 @@ def _docker_inspect(container: str, template: str) -> Optional[str]:
     if value == '<no value>':
         return None
     return value or None
+
+
+def _fetch_container_env(container: str) -> dict[str, str]:
+    """Return the environment variables for ``container`` as a dictionary."""
+
+    result = subprocess.run(
+        ['docker', 'inspect', '--format', '{{json .Config.Env}}', container],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return {}
+
+    output = result.stdout.strip()
+    if not output:
+        return {}
+
+    try:
+        env_entries = json.loads(output)
+    except json.JSONDecodeError:
+        return {}
+
+    env: dict[str, str] = {}
+    for entry in env_entries:
+        if not isinstance(entry, str) or '=' not in entry:
+            continue
+        key, value = entry.split('=', 1)
+        env[key] = value
+    return env
 
 
 _DOCKER_TIMESTAMP_PATTERN = re.compile(
@@ -515,6 +543,8 @@ _URLLIB3_REPAIR_ATTEMPTED = False
 _PYTHON_SITE_PACKAGES_RE = re.compile(
     r'File "(?P<path>/usr/(?:local/)?lib(?:64)?/python[0-9.]+/site-packages)/'
 )
+
+_BOOTSTRAP_ADMIN_CREDENTIALS: Optional[tuple[str, str]] = None
 
 
 def _aws_cli_import_check() -> bool:
@@ -951,6 +981,46 @@ def wait_for_port(host: str, port: int, timeout: float = 900.0) -> None:
     raise SystemExit(f'Port {host}:{port} did not become reachable: {last_error}')
 
 
+def _bootstrap_admin_credentials() -> tuple[str, str]:
+    """Return the Vertica bootstrap administrator credentials."""
+
+    global _BOOTSTRAP_ADMIN_CREDENTIALS
+    if _BOOTSTRAP_ADMIN_CREDENTIALS is not None:
+        return _BOOTSTRAP_ADMIN_CREDENTIALS
+
+    container_env = _fetch_container_env('vertica_ce')
+
+    user_source: str
+    if 'VERTICA_DB_USER' in container_env:
+        user = container_env['VERTICA_DB_USER'] or BOOTSTRAP_ADMIN_DEFAULT_USER
+        user_source = 'container configuration'
+    elif os.getenv('DBADMIN_USER'):
+        user = os.environ['DBADMIN_USER']
+        user_source = 'environment variable DBADMIN_USER'
+    else:
+        user = BOOTSTRAP_ADMIN_DEFAULT_USER
+        user_source = 'built-in default'
+
+    password_source: str
+    password = container_env.get('VERTICA_DB_PASSWORD')
+    if password is not None:
+        password_source = 'container configuration'
+    else:
+        env_password = os.environ.get('DBADMIN_PASSWORD')
+        if env_password is not None:
+            password = env_password
+            password_source = 'environment variable DBADMIN_PASSWORD'
+        else:
+            password = ''
+            password_source = 'empty password default'
+
+    log(f'Using bootstrap admin user {user!r} from {user_source}')
+    log(f'Resolved bootstrap admin password from {password_source}')
+
+    _BOOTSTRAP_ADMIN_CREDENTIALS = (user, password)
+    return _BOOTSTRAP_ADMIN_CREDENTIALS
+
+
 def connect_and_query(
     label: str,
     host: str,
@@ -1024,13 +1094,18 @@ def main() -> int:
         run_command(['docker', 'pull', image_name])
     run_command(['docker', 'inspect', '--format', '{{json .NetworkSettings.Ports}}', 'vertica_ce'])
 
-    connect_and_query('dbadmin@localhost', '127.0.0.1', DBADMIN_USER, DBADMIN_PASSWORD)
+    bootstrap_user, bootstrap_password = _bootstrap_admin_credentials()
+    connect_and_query(
+        f'{bootstrap_user}@localhost', '127.0.0.1', bootstrap_user, bootstrap_password
+    )
     connect_and_query('bootstrap_admin@localhost', '127.0.0.1', ADMIN_USER, ADMIN_PASSWORD)
 
     try:
-        connect_and_query('dbadmin@public_ip', public_ipv4, DBADMIN_USER, DBADMIN_PASSWORD)
+        connect_and_query(
+            f'{bootstrap_user}@public_ip', public_ipv4, bootstrap_user, bootstrap_password
+        )
     except Exception as exc:
-        log(f'[dbadmin@public_ip] Connection attempt failed: {exc}')
+        log(f'[{bootstrap_user}@public_ip] Connection attempt failed: {exc}')
         raise
 
     smoke_user = f'smoke_{uuid.uuid4().hex[:8]}'
