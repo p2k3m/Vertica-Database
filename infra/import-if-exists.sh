@@ -2,6 +2,29 @@
 set -euo pipefail
 # Import resources that already exist (same names/tags) to avoid duplicates.
 
+# The Terraform configuration requires an `aws_account_id` variable.  When that
+# variable is not provided (for example in local smoke tests or CI jobs that
+# don't have AWS credentials) Terraform exits with an error before we can do any
+# work.  Detect that situation early and bail out gracefully so running this
+# helper script is always safe.
+
+maybe_var(){
+  local name="$1"
+  if [ "${!name+x}" = x ]; then
+    printf '%s' "${!name}"
+  fi
+}
+
+AWS_ACCOUNT_ID="$(maybe_var TF_VAR_aws_account_id)"
+if [ -z "$AWS_ACCOUNT_ID" ]; then
+  AWS_ACCOUNT_ID="$(maybe_var aws_account_id)"
+fi
+
+if [ -z "$AWS_ACCOUNT_ID" ]; then
+  echo "[import-if-exists] Skipping Terraform imports because aws_account_id is unset." >&2
+  exit 0
+fi
+
 # Terraform prompts for unset variables by default which causes this helper script
 # to hang in non-interactive environments (for example GitHub Actions) while it
 # waits for values such as `var.aws_account_id`.  Explicitly disable interactive
