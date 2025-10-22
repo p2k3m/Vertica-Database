@@ -601,18 +601,16 @@ def _ensure_known_identity(path: Path) -> None:
         )
         return
 
-    if not needs_adjustment:
-        return
-
-    try:
-        os.chown(path, uid, gid)
-    except OSError as exc:
-        log(f'Unable to adjust ownership on {path}: {exc}')
-    else:
-        log(
-            'Adjusted ownership on '
-            f'{path} to uid {uid} gid {gid} to ensure Vertica tooling can resolve it'
-        )
+    if needs_adjustment:
+        try:
+            os.chown(path, uid, gid)
+        except OSError as exc:
+            log(f'Unable to adjust ownership on {path}: {exc}')
+        else:
+            log(
+                'Adjusted ownership on '
+                f'{path} to uid {uid} gid {gid} to ensure Vertica tooling can resolve it'
+            )
 
     if _is_within_vertica_data_directories(path):
         _ensure_vertica_admin_identity(path)
