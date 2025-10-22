@@ -63,7 +63,12 @@ def _quote_identifier(identifier: str) -> str:
 
 _METADATA_TOKEN: Optional[str] = None
 
-VERTICA_DATA_DIRECTORIES = [Path('/var/lib/vertica')]
+# Vertica container images historically mounted their persistent data directory
+# at ``/var/lib/vertica`` on the host.  Newer infrastructure variants (including
+# the publicly distributed containers) instead mount ``/data/vertica``.  Handle
+# both locations so the smoke test can reset or seed configuration regardless of
+# which layout the instance uses.
+VERTICA_DATA_DIRECTORIES = [Path('/var/lib/vertica'), Path('/data/vertica')]
 # Vertica container images have historically run as uid/gid 500, but newer builds
 # may choose a different runtime identity. Use permissive modes rather than
 # forcing ownership so that any future uid/gid changes continue to work.

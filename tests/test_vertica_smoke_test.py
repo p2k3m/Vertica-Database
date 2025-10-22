@@ -284,6 +284,26 @@ def test_ensure_container_admintools_conf_readable_noop(monkeypatch):
     assert not any('Detected unreadable admintools.conf' in entry for entry in logs)
 
 
+def test_reset_vertica_data_directories_handles_multiple_mount_points(tmp_path, monkeypatch):
+    varlib = tmp_path / 'var_lib'
+    data = tmp_path / 'data'
+    for base in (varlib, data):
+        (base / 'vertica').mkdir(parents=True)
+
+    monkeypatch.setattr(
+        smoke,
+        'VERTICA_DATA_DIRECTORIES',
+        [varlib, data],
+        raising=False,
+    )
+
+    removed = smoke._reset_vertica_data_directories()
+
+    assert removed is True
+    assert not (varlib / 'vertica').exists()
+    assert not (data / 'vertica').exists()
+
+
 def test_connect_and_query_prefers_tls(monkeypatch):
     captured_config: dict[str, object] = {}
 
