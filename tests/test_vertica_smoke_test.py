@@ -261,7 +261,9 @@ def test_vertica_admin_identity_candidates_uses_container_identity(monkeypatch):
 
     candidates = smoke._vertica_admin_identity_candidates()
 
-    assert candidates == [(1000, 1001)]
+    assert candidates[0] == (1000, 1001)
+    assert (smoke.VERTICA_ADMIN_FALLBACK_UID, smoke.VERTICA_ADMIN_FALLBACK_GID) in candidates
+    assert (1000, 1000) in candidates
 
 
 def test_vertica_admin_identity_candidates_includes_known_fallback(monkeypatch):
@@ -284,9 +286,11 @@ def test_vertica_admin_identity_candidates_includes_known_fallback(monkeypatch):
 
     candidates = smoke._vertica_admin_identity_candidates()
 
-    assert candidates == [
-        (smoke.VERTICA_ADMIN_FALLBACK_UID, smoke.VERTICA_ADMIN_FALLBACK_GID)
-    ]
+    assert (
+        smoke.VERTICA_ADMIN_FALLBACK_UID,
+        smoke.VERTICA_ADMIN_FALLBACK_GID,
+    ) in candidates
+    assert (1000, 1000) in candidates
 
 
 def test_ensure_container_admintools_conf_readable_adjusts(monkeypatch):
