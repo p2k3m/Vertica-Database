@@ -388,6 +388,8 @@ def _seed_default_admintools_conf(config_dir: Path) -> None:
         log(f'Unable to write default admintools.conf at {admintools_conf}: {exc}')
         return
 
+    _align_identity_with_parent(admintools_conf)
+
     try:
         os.chmod(admintools_conf, 0o666)
     except OSError as exc:
@@ -397,6 +399,47 @@ def _seed_default_admintools_conf(config_dir: Path) -> None:
         )
 
     _ensure_known_identity(admintools_conf)
+
+
+def _align_identity_with_parent(path: Path) -> None:
+    """Attempt to match ``path`` ownership to its parent directory."""
+
+    if os.geteuid() != 0:
+        return
+
+    parent = path.parent
+
+    try:
+        parent_stat = parent.stat()
+    except OSError as exc:
+        log(f'Unable to determine ownership of {parent} when adjusting {path}: {exc}')
+        return
+
+    try:
+        current_stat = path.stat()
+    except OSError as exc:
+        log(f'Unable to inspect ownership of {path}: {exc}')
+        return
+
+    if (
+        current_stat.st_uid == parent_stat.st_uid
+        and current_stat.st_gid == parent_stat.st_gid
+    ):
+        return
+
+    try:
+        os.chown(path, parent_stat.st_uid, parent_stat.st_gid)
+    except OSError as exc:
+        log(
+            'Unable to align ownership on '
+            f'{path} with parent {parent}: {exc}'
+        )
+    else:
+        log(
+            'Aligned ownership on '
+            f'{path} to uid {parent_stat.st_uid} gid {parent_stat.st_gid} '
+            f'to match parent {parent}'
+        )
 
 
 def _ensure_known_identity(path: Path) -> None:
