@@ -1536,10 +1536,8 @@ def _remove_stale_vertica_container() -> bool:
                 'docker',
                 'ps',
                 '--all',
-                '--filter',
-                'name=^/vertica_ce$',
                 '--format',
-                '{{.ID}}',
+                '{{.ID}}\t{{.Names}}',
             ],
             capture_output=True,
             text=True,
@@ -1553,7 +1551,19 @@ def _remove_stale_vertica_container() -> bool:
             log(f'[stderr] {presence_check.stderr.rstrip()}')
         return False
 
-    container_ids = [line.strip() for line in presence_check.stdout.splitlines() if line.strip()]
+    container_ids = []
+    for line in presence_check.stdout.splitlines():
+        if not line.strip():
+            continue
+
+        try:
+            container_id, container_name = line.split('\t', 1)
+        except ValueError:
+            container_id, container_name = line.strip(), ''
+
+        if container_name.strip() == 'vertica_ce':
+            container_ids.append(container_id.strip())
+
     if not container_ids:
         return False
 
