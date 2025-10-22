@@ -1,7 +1,9 @@
 import configparser
+import grp
 import json
 import os
 import platform
+import pwd
 import re
 import shlex
 import shutil
@@ -185,6 +187,8 @@ def _ensure_directory(path: Path) -> bool:
     except OSError as exc:
         log(f'Unable to adjust permissions on {path}: {exc}')
 
+    _ensure_known_identity(path)
+
     return True
 
 
@@ -254,6 +258,7 @@ def _sanitize_vertica_data_directories() -> None:
                                 continue
 
                 if config_path.exists() and config_path.is_dir():
+                    _ensure_known_identity(config_path)
                     admintools_conf = config_path / 'admintools.conf'
                     if not admintools_conf.exists():
                         container_status = _docker_inspect(
@@ -350,6 +355,7 @@ def _sanitize_vertica_data_directories() -> None:
             # startup.
             if config_path.exists():
                 _ensure_directory(config_path)
+                _ensure_known_identity(config_path)
                 _seed_default_admintools_conf(config_path)
 
 
@@ -388,6 +394,55 @@ def _seed_default_admintools_conf(config_dir: Path) -> None:
         log(
             'Unable to relax permissions on '
             f'{admintools_conf}: {exc}'
+        )
+
+    _ensure_known_identity(admintools_conf)
+
+
+def _ensure_known_identity(path: Path) -> None:
+    """Ensure ``path`` is owned by a user and group present in /etc/passwd and /etc/group."""
+
+    if os.geteuid() != 0:
+        return
+
+    try:
+        stat_info = path.stat()
+    except OSError as exc:
+        log(f'Unable to inspect ownership of {path}: {exc}')
+        return
+
+    uid = stat_info.st_uid
+    gid = stat_info.st_gid
+
+    needs_adjustment = False
+
+    try:
+        pwd.getpwuid(uid)
+    except KeyError:
+        needs_adjustment = True
+        uid = 0
+    except OSError as exc:
+        log(f'Unable to resolve user for {path}: {exc}')
+
+    try:
+        grp.getgrgid(gid)
+    except KeyError:
+        needs_adjustment = True
+        gid = 0
+    except OSError as exc:
+        log(f'Unable to resolve group for {path}: {exc}')
+
+    if not needs_adjustment:
+        return
+
+    try:
+        os.chown(path, uid, gid)
+    except OSError as exc:
+        log(f'Unable to adjust ownership on {path}: {exc}')
+    else:
+        log(
+            'Adjusted ownership on '
+            f'{path} to uid {uid} gid {gid} to ensure Vertica tooling can resolve it'
         )
 
 
