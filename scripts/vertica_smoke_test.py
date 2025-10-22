@@ -26,6 +26,16 @@ DB_PORT = 5433
 BOOTSTRAP_ADMIN_DEFAULT_USER = 'dbadmin'
 VERTICA_ADMIN_FALLBACK_UID = 500
 VERTICA_ADMIN_FALLBACK_GID = 500
+# Vertica community edition container images historically used the legacy
+# ``dbadmin`` identity with uid/gid 500.  Newer releases have switched to a more
+# conventional uid/gid of 1000 for the administrator account.  Include both
+# combinations when attempting to align ownership on the host so that the smoke
+# test can preemptively fix permissions even before the container starts (and
+# exposes its runtime identity for discovery via ``docker exec``).
+VERTICA_ADMIN_COMMON_IDENTITIES = (
+    (VERTICA_ADMIN_FALLBACK_UID, VERTICA_ADMIN_FALLBACK_GID),
+    (1000, 1000),
+)
 ADMIN_USER = os.environ['ADMIN_USER']
 ADMIN_PASSWORD = os.environ['ADMIN_PASSWORD']
 
@@ -146,19 +156,27 @@ def _vertica_admin_identity_candidates() -> list[tuple[int, int]]:
         candidates.append(container_identity)
         seen.add(container_identity)
 
-    try:
-        fallback_entry = pwd.getpwuid(VERTICA_ADMIN_FALLBACK_UID)
-    except KeyError:
-        fallback_entry = None
-    except OSError as exc:
-        log(
-            'Unable to resolve fallback Vertica admin identity '
-            f'uid {VERTICA_ADMIN_FALLBACK_UID}: {exc}'
-        )
-        fallback_entry = None
+    # Include known-good uid/gid pairs even when the host does not provide
+    # corresponding passwd/group entries.  ``os.chown`` accepts raw numeric
+    # identifiers which allows us to align ownership with the container's
+    # expected administrator identity ahead of time.
+    for uid, gid in VERTICA_ADMIN_COMMON_IDENTITIES:
+        try:
+            entry = pwd.getpwuid(uid)
+        except KeyError:
+            entry = None
+        except OSError as exc:
+            log(
+                'Unable to resolve fallback Vertica admin identity '
+                f'uid {uid}: {exc}'
+            )
+            entry = None
 
-    if fallback_entry is not None:
-        pair = (fallback_entry.pw_uid, fallback_entry.pw_gid)
+        if entry is not None:
+            pair = (entry.pw_uid, entry.pw_gid)
+        else:
+            pair = (uid, gid)
+
         if pair not in seen:
             candidates.append(pair)
             seen.add(pair)
