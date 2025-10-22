@@ -250,6 +250,7 @@ def test_ensure_known_identity_aligns_vertica_admin(tmp_path, monkeypatch):
 def test_ensure_container_admintools_conf_readable_adjusts(monkeypatch):
     logs: list[str] = []
     calls: list[list[str]] = []
+    test_r_invocations = 0
 
     def fake_log(message: str) -> None:
         logs.append(message)
@@ -260,10 +261,18 @@ def test_ensure_container_admintools_conf_readable_adjusts(monkeypatch):
     def fake_run(command, capture_output=True, text=True):
         calls.append(command)
         script = command[-1]
+        nonlocal test_r_invocations
         if 'test -e' in script:
             return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+        if 'printf' in script and 'id -u dbadmin' in script:
+            return subprocess.CompletedProcess(command, 0, stdout='1001:1001', stderr='')
+        if 'stat -c' in script:
+            return subprocess.CompletedProcess(command, 0, stdout='0:0', stderr='')
+        if 'chown' in script:
+            return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
         if 'test -r' in script:
-            return subprocess.CompletedProcess(command, 1, stdout='', stderr='')
+            test_r_invocations += 1
+            return subprocess.CompletedProcess(command, 1 if test_r_invocations < 3 else 0, stdout='', stderr='')
         if 'chmod' in script:
             return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
         raise AssertionError(f'Unexpected command: {command}')
@@ -276,6 +285,8 @@ def test_ensure_container_admintools_conf_readable_adjusts(monkeypatch):
 
     assert adjusted is True
     assert any('Detected unreadable admintools.conf' in entry for entry in logs)
+    assert any('chown' in cmd[-1] for cmd in calls)
+    assert any('Aligned admintools.conf ownership inside container' in entry for entry in logs)
     assert any('chmod a+r' in cmd[-1] for cmd in calls)
 
 
@@ -292,6 +303,10 @@ def test_ensure_container_admintools_conf_readable_noop(monkeypatch):
         script = command[-1]
         if 'test -e' in script:
             return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
+        if 'printf' in script and 'id -u dbadmin' in script:
+            return subprocess.CompletedProcess(command, 0, stdout='1001:1001', stderr='')
+        if 'stat -c' in script:
+            return subprocess.CompletedProcess(command, 0, stdout='1001:1001', stderr='')
         if 'test -r' in script:
             return subprocess.CompletedProcess(command, 0, stdout='', stderr='')
         raise AssertionError(f'Unexpected command: {command}')
