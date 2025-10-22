@@ -162,8 +162,14 @@ mkdir -p /var/lib/vertica
 # The Vertica container historically ran as the "dbadmin" user (uid/gid 500),
 # but newer releases may use a different UID/GID. Relax the ownership
 # assumption and ensure the directory is writable by whatever user the
-# container starts as.
-chown 500:500 /var/lib/vertica || true
+# container starts as.  When the host does not provide a matching user we leave
+# ownership unchanged so the smoke test can discover the in-container identity
+# dynamically once Vertica starts.
+if id -u dbadmin >/dev/null 2>&1; then
+  chown "$(id -u dbadmin):$(id -g dbadmin)" /var/lib/vertica
+else
+  echo "[user-data] Host dbadmin user not present; leaving /var/lib/vertica ownership unchanged"
+fi
 chmod 777 /var/lib/vertica
 
 # Ensure the Vertica image is available locally before starting the service
