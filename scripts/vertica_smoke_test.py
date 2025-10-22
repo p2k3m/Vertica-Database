@@ -681,6 +681,44 @@ def _admintools_conf_needs_rebuild(admintools_conf: Path) -> bool:
     return False
 
 
+def _container_dbadmin_identity(container: str) -> Optional[tuple[int, int]]:
+    """Return the ``(uid, gid)`` for ``dbadmin`` inside ``container`` when available."""
+
+    if shutil.which('docker') is None:
+        return None
+
+    command = [
+        'docker',
+        'exec',
+        '--user',
+        '0',
+        container,
+        'sh',
+        '-c',
+        "uid=$(id -u dbadmin 2>/dev/null) && gid=$(id -g dbadmin 2>/dev/null) && printf '%s:%s' \"$uid\" \"$gid\"",
+    ]
+
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except FileNotFoundError:
+        log('Docker CLI is not available while resolving dbadmin identity inside container')
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    output = result.stdout.strip()
+    if not output or ':' not in output:
+        return None
+
+    uid_str, gid_str = output.split(':', 1)
+    try:
+        return int(uid_str), int(gid_str)
+    except ValueError:
+        log(f'Unexpected dbadmin identity output inside container: {output!r}')
+        return None
+
+
 def _ensure_container_admintools_conf_readable(container: str) -> bool:
     """Relax permissions on ``admintools.conf`` inside ``container`` if required.
 
@@ -692,72 +730,99 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
 
     quoted_path = shlex.quote(_VERTICA_CONTAINER_ADMINTOOLS_PATH)
 
-    try:
-        exists_result = subprocess.run(
-            [
-                'docker',
-                'exec',
-                '--user',
-                '0',
-                container,
-                'sh',
-                '-c',
-                f'test -e {quoted_path}',
-            ],
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        log('Docker CLI is not available while inspecting admintools.conf inside container')
+    def _docker_exec(user: str, command: str, missing_cli_message: str) -> Optional[subprocess.CompletedProcess[str]]:
+        try:
+            return subprocess.run(
+                [
+                    'docker',
+                    'exec',
+                    '--user',
+                    user,
+                    container,
+                    'sh',
+                    '-c',
+                    command,
+                ],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            log(missing_cli_message)
+            return None
+
+    exists_result = _docker_exec(
+        '0',
+        f'test -e {quoted_path}',
+        'Docker CLI is not available while inspecting admintools.conf inside container',
+    )
+    if exists_result is None or exists_result.returncode != 0:
         return False
 
-    if exists_result.returncode != 0:
-        return False
+    adjustments_made = False
 
-    try:
-        readable_result = subprocess.run(
-            [
-                'docker',
-                'exec',
-                '--user',
-                'dbadmin',
-                container,
-                'sh',
-                '-c',
-                f'test -r {quoted_path}',
-            ],
-            capture_output=True,
-            text=True,
+    target_identity = _container_dbadmin_identity(container)
+    if target_identity is not None:
+        owner_result = _docker_exec(
+            '0',
+            f'stat -c "%u:%g" {quoted_path}',
+            'Docker CLI is not available while inspecting admintools.conf ownership inside container',
         )
-    except FileNotFoundError:
-        log('Docker CLI is not available while validating admintools.conf permissions inside container')
-        return False
+        if owner_result is None:
+            return False
+        if owner_result.returncode == 0:
+            owner_output = owner_result.stdout.strip()
+            if owner_output:
+                try:
+                    current_uid_str, current_gid_str = owner_output.split(':', 1)
+                    current_identity = (int(current_uid_str), int(current_gid_str))
+                except ValueError:
+                    current_identity = None
+                    log(f'Unexpected ownership output for admintools.conf inside container: {owner_output!r}')
+                else:
+                    if current_identity != target_identity:
+                        uid, gid = target_identity
+                        chown_result = _docker_exec(
+                            '0',
+                            f'chown {uid}:{gid} {quoted_path}',
+                            'Docker CLI is not available while adjusting admintools.conf ownership inside container',
+                        )
+                        if chown_result is None:
+                            return False
+                        if chown_result.stdout:
+                            log(chown_result.stdout.rstrip())
+                        if chown_result.stderr:
+                            log(f'[stderr] {chown_result.stderr.rstrip()}')
+                        if chown_result.returncode == 0:
+                            adjustments_made = True
+                            log(
+                                'Aligned admintools.conf ownership inside container '
+                                f'with dbadmin (uid {uid} gid {gid})'
+                            )
+                        else:
+                            log('Failed to adjust admintools.conf ownership inside container')
+
+    readable_result = _docker_exec(
+        'dbadmin',
+        f'test -r {quoted_path}',
+        'Docker CLI is not available while validating admintools.conf permissions inside container',
+    )
+    if readable_result is None:
+        return adjustments_made
 
     if readable_result.returncode == 0:
-        return False
+        return adjustments_made
 
-    log(
-        'Detected unreadable admintools.conf inside container; attempting to relax permissions'
+    log('Detected unreadable admintools.conf inside container; attempting to relax permissions')
+
+    fix_result = _docker_exec(
+        '0',
+        f'chmod a+r {quoted_path}',
+        'Docker CLI is not available while adjusting admintools.conf permissions inside container',
     )
+    if fix_result is None:
+        return adjustments_made
 
-    try:
-        fix_result = subprocess.run(
-            [
-                'docker',
-                'exec',
-                '--user',
-                '0',
-                container,
-                'sh',
-                '-c',
-                f'chmod a+r {quoted_path}',
-            ],
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        log('Docker CLI is not available while adjusting admintools.conf permissions inside container')
-        return False
+    adjustments_made = True
 
     if fix_result.stdout:
         log(fix_result.stdout.rstrip())
@@ -766,54 +831,29 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
 
     if fix_result.returncode != 0:
         log('Failed to adjust admintools.conf permissions inside container')
-        return False
-
-    # Re-check readability now that permissions were adjusted.
-    try:
-        readable_result = subprocess.run(
-            [
-                'docker',
-                'exec',
-                '--user',
-                'dbadmin',
-                container,
-                'sh',
-                '-c',
-                f'test -r {quoted_path}',
-            ],
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        log('Docker CLI is not available while validating admintools.conf permissions inside container')
         return True
 
+    readable_result = _docker_exec(
+        'dbadmin',
+        f'test -r {quoted_path}',
+        'Docker CLI is not available while validating admintools.conf permissions inside container',
+    )
+    if readable_result is None:
+        return True
     if readable_result.returncode == 0:
         return True
 
-    # The file permissions alone were insufficient, likely due to restrictive
-    # execute permissions on the parent directory. Attempt to relax directory
-    # permissions as well to allow dbadmin to traverse the path.
     parent_dir = shlex.quote(str(Path(_VERTICA_CONTAINER_ADMINTOOLS_PATH).parent))
 
-    try:
-        dir_fix_result = subprocess.run(
-            [
-                'docker',
-                'exec',
-                '--user',
-                '0',
-                container,
-                'sh',
-                '-c',
-                f'chmod a+rx {parent_dir}',
-            ],
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        log('Docker CLI is not available while adjusting admintools.conf directory permissions inside container')
+    dir_fix_result = _docker_exec(
+        '0',
+        f'chmod a+rx {parent_dir}',
+        'Docker CLI is not available while adjusting admintools.conf directory permissions inside container',
+    )
+    if dir_fix_result is None:
         return True
+
+    adjustments_made = True
 
     if dir_fix_result.stdout:
         log(dir_fix_result.stdout.rstrip())
@@ -824,29 +864,18 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
         log('Failed to adjust admintools.conf directory permissions inside container')
         return True
 
-    try:
-        readable_result = subprocess.run(
-            [
-                'docker',
-                'exec',
-                '--user',
-                'dbadmin',
-                container,
-                'sh',
-                '-c',
-                f'test -r {quoted_path}',
-            ],
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        log('Docker CLI is not available while validating admintools.conf permissions inside container')
+    readable_result = _docker_exec(
+        'dbadmin',
+        f'test -r {quoted_path}',
+        'Docker CLI is not available while validating admintools.conf permissions inside container',
+    )
+    if readable_result is None:
         return True
-
     if readable_result.returncode != 0:
         log('Unable to verify admintools.conf readability inside container after permission adjustments')
 
     return True
+
 
 
 def _reset_vertica_data_directories() -> bool:
