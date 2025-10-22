@@ -796,6 +796,8 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
     adjustments_made = False
 
     target_identity = _container_dbadmin_identity(container)
+    require_named_chown = target_identity is None
+
     if target_identity is not None:
         owner_result = _docker_exec(
             '0',
@@ -835,6 +837,29 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
                             )
                         else:
                             log('Failed to adjust admintools.conf ownership inside container')
+                            require_named_chown = True
+            else:
+                require_named_chown = True
+        else:
+            require_named_chown = True
+
+    if require_named_chown:
+        chown_result = _docker_exec(
+            '0',
+            f'chown dbadmin:dbadmin {quoted_path}',
+            'Docker CLI is not available while aligning admintools.conf ownership inside container',
+        )
+        if chown_result is None:
+            return False
+        if chown_result.stdout:
+            log(chown_result.stdout.rstrip())
+        if chown_result.stderr:
+            log(f'[stderr] {chown_result.stderr.rstrip()}')
+        if chown_result.returncode == 0:
+            adjustments_made = True
+            log('Aligned admintools.conf ownership inside container with dbadmin account')
+        else:
+            log('Failed to align admintools.conf ownership inside container using dbadmin account')
 
     readable_result = _docker_exec(
         'dbadmin',
