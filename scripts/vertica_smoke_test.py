@@ -258,7 +258,7 @@ def _sanitize_vertica_data_directories() -> None:
                                 continue
 
                 if config_path.exists() and config_path.is_dir():
-                    _ensure_known_identity(config_path)
+                    _ensure_known_identity_tree(config_path, max_depth=2)
                     admintools_conf = config_path / 'admintools.conf'
                     if not admintools_conf.exists():
                         container_status = _docker_inspect(
@@ -355,7 +355,7 @@ def _sanitize_vertica_data_directories() -> None:
             # startup.
             if config_path.exists():
                 _ensure_directory(config_path)
-                _ensure_known_identity(config_path)
+                _ensure_known_identity_tree(config_path, max_depth=2)
                 _seed_default_admintools_conf(config_path)
 
 
@@ -444,6 +444,41 @@ def _ensure_known_identity(path: Path) -> None:
             'Adjusted ownership on '
             f'{path} to uid {uid} gid {gid} to ensure Vertica tooling can resolve it'
         )
+
+
+def _ensure_known_identity_tree(path: Path, *, max_depth: int = 2) -> None:
+    """Ensure ``path`` and its descendants up to ``max_depth`` have known identities."""
+
+    if os.geteuid() != 0:
+        return
+
+    stack: list[tuple[Path, int]] = [(path, 0)]
+
+    while stack:
+        current, depth = stack.pop()
+        _ensure_known_identity(current)
+
+        if depth >= max_depth:
+            continue
+
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    child_path = Path(entry.path)
+                    _ensure_known_identity(child_path)
+
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                    except OSError as exc:
+                        log(f'Unable to inspect {child_path}: {exc}')
+                        continue
+
+                    if is_dir:
+                        stack.append((child_path, depth + 1))
+        except NotADirectoryError:
+            continue
+        except OSError as exc:
+            log(f'Unable to inspect contents of {current}: {exc}')
 
 
 def _admintools_conf_needs_rebuild(admintools_conf: Path) -> bool:
