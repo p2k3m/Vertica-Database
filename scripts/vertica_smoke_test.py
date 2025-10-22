@@ -117,6 +117,54 @@ DEFAULT_ADMINTOOLS_CONF = textwrap.dedent(
 ).strip() + "\n"
 
 
+def _candidate_vertica_roots(base_path: Path) -> list[Path]:
+    """Return potential Vertica data roots located under ``base_path``."""
+
+    candidates: list[Path] = []
+
+    known_names = {
+        'vertica',
+    }
+
+    for value in (DB_NAME, os.getenv('VERTICA_DB_NAME'), os.getenv('DB_NAME')):
+        if not value:
+            continue
+        stripped = value.strip()
+        if not stripped:
+            continue
+        known_names.add(stripped)
+
+    for name in known_names:
+        candidates.append(base_path / name)
+
+    config_dir = base_path / 'config'
+    if config_dir.exists():
+        candidates.append(base_path)
+
+    try:
+        for entry in base_path.iterdir():
+            if not entry.is_dir():
+                continue
+            if entry.name in known_names:
+                candidates.append(entry)
+                continue
+            if (entry / 'config').exists():
+                candidates.append(entry)
+    except OSError as exc:
+        log(f'Unable to inspect contents of {base_path}: {exc}')
+
+    unique_candidates: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = os.fspath(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_candidates.append(candidate)
+
+    return unique_candidates
+
+
 def _ensure_directory(path: Path) -> bool:
     try:
         if path.exists() and path.is_symlink():
@@ -148,157 +196,161 @@ def _sanitize_vertica_data_directories() -> None:
         if not _ensure_directory(base_path):
             continue
 
-        vertica_root = base_path / 'vertica'
-        if vertica_root.exists() and vertica_root.is_symlink():
-            try:
-                target = os.readlink(vertica_root)
-            except OSError as exc:
-                log(f'Unable to inspect symlink {vertica_root}: {exc}')
-            else:
-                if target.startswith('/data') or target.startswith('data'):
-                    log(
-                        f'Removing recursive symlink {vertica_root} -> {target} '
-                        'to avoid Vertica bootstrap loops'
-                    )
-                    try:
-                        vertica_root.unlink()
-                    except OSError as exc:
-                        log(f'Unable to remove {vertica_root}: {exc}')
-        _ensure_directory(vertica_root)
+        candidate_roots = _candidate_vertica_roots(base_path) or [base_path / 'vertica']
 
-        config_path = vertica_root / 'config'
-        if config_path.exists():
-            if config_path.is_symlink():
+        for vertica_root in candidate_roots:
+            if vertica_root.exists() and vertica_root.is_symlink():
                 try:
-                    target = os.readlink(config_path)
+                    target = os.readlink(vertica_root)
                 except OSError as exc:
-                    log(f'Unable to inspect symlink {config_path}: {exc}')
+                    log(f'Unable to inspect symlink {vertica_root}: {exc}')
                 else:
-                    remove_symlink = False
                     if target.startswith('/data') or target.startswith('data'):
-                        remove_symlink = True
-                    else:
-                        try:
-                            if os.path.isabs(target):
-                                resolved_target = Path(target).resolve()
-                            else:
-                                resolved_target = (config_path.parent / target).resolve()
-                        except FileNotFoundError:
-                            resolved_target = None
-
-                        if resolved_target and resolved_target == Path('/opt/vertica/config'):
-                            remove_symlink = True
-
-                    if remove_symlink:
                         log(
-                            f'Removing confusing symlink {config_path} -> {target} '
-                            'to allow Vertica to recreate configuration files'
+                            f'Removing recursive symlink {vertica_root} -> {target} '
+                            'to avoid Vertica bootstrap loops'
                         )
                         try:
-                            config_path.unlink()
-                        except OSError as exc:
-                            log(f'Unable to remove {config_path}: {exc}')
-                        else:
-                            continue
-
-            if config_path.exists() and config_path.is_dir():
-                admintools_conf = config_path / 'admintools.conf'
-                if not admintools_conf.exists():
-                    container_status = _docker_inspect(
-                        'vertica_ce', '{{.State.Status}}'
-                    )
-                    container_health = _docker_inspect(
-                        'vertica_ce', '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
-                    )
-                    should_preserve = (
-                        container_status in {'running', 'restarting'}
-                        and container_health == 'healthy'
-                    )
-
-                    if should_preserve:
-                        log(
-                            'Detected missing admintools.conf but Vertica '
-                            f'container is currently {container_status} '
-                            '(healthy); skipping directory removal to avoid '
-                            'disrupting the running container'
-                        )
-                    else:
-                        removal_attempted = False
-                        health_display = container_health or '<unknown>'
-                        status_display = container_status or '<absent>'
-                        if container_status in {'running', 'restarting'}:
-                            log(
-                                'Detected missing admintools.conf while '
-                                f'container status is {status_display} with '
-                                f'health {health_display}; stopping vertica_ce '
-                                'container to allow configuration rebuild'
-                            )
-                            removal_attempted = True
-                            try:
-                                removal = subprocess.run(
-                                    ['docker', 'rm', '-f', 'vertica_ce'],
-                                    capture_output=True,
-                                    text=True,
-                                )
-                            except FileNotFoundError:
-                                log(
-                                    'Docker CLI unavailable while attempting to '
-                                    'remove vertica_ce container; continuing '
-                                    'with directory cleanup'
-                                )
-                            else:
-                                if removal.stdout:
-                                    log(removal.stdout.rstrip())
-                                if removal.stderr:
-                                    log(f'[stderr] {removal.stderr.rstrip()}')
-                                if removal.returncode != 0:
-                                    log(
-                                        'Failed to remove vertica_ce container '
-                                        f'prior to configuration cleanup: exit '
-                                        f'code {removal.returncode}'
-                                    )
-                        else:
-                            log(
-                                'Detected missing admintools.conf while '
-                                f'container status is {status_display} with '
-                                f'health {health_display}; removing incomplete '
-                                'data directory to allow Vertica to rebuild it '
-                                'during startup'
-                            )
-                        if removal_attempted:
-                            log(
-                                'Removing incomplete Vertica data directory at '
-                                f'{vertica_root} (admintools.conf missing) '
-                                'after stopping container'
-                            )
-                        else:
-                            log(
-                                'Removing incomplete Vertica data directory at '
-                                f'{vertica_root} (admintools.conf missing) to '
-                                'allow Vertica to rebuild it during startup'
-                            )
-                        try:
-                            shutil.rmtree(vertica_root)
-                        except FileNotFoundError:
-                            pass
+                            vertica_root.unlink()
                         except OSError as exc:
                             log(f'Unable to remove {vertica_root}: {exc}')
-                        else:
-                            _ensure_directory(vertica_root)
-                            _seed_default_admintools_conf(vertica_root / 'config')
-                        continue
 
-        # When the Vertica container starts for the first time it populates the
-        # ``config`` directory with critical bootstrap files such as
-        # ``admintools.conf``.  Creating the directory ahead of time confuses the
-        # container's bootstrap logic (the source and destination of the
-        # configuration copy become identical) which in turn leaves the
-        # configuration incomplete.  Only adjust permissions when the directory
-        # already exists and otherwise allow the container to create it during
-        # startup.
-        if config_path.exists():
-            _ensure_directory(config_path)
-            _seed_default_admintools_conf(config_path)
+            if not _ensure_directory(vertica_root):
+                continue
+
+            config_path = vertica_root / 'config'
+            if config_path.exists():
+                if config_path.is_symlink():
+                    try:
+                        target = os.readlink(config_path)
+                    except OSError as exc:
+                        log(f'Unable to inspect symlink {config_path}: {exc}')
+                    else:
+                        remove_symlink = False
+                        if target.startswith('/data') or target.startswith('data'):
+                            remove_symlink = True
+                        else:
+                            try:
+                                if os.path.isabs(target):
+                                    resolved_target = Path(target).resolve()
+                                else:
+                                    resolved_target = (config_path.parent / target).resolve()
+                            except FileNotFoundError:
+                                resolved_target = None
+
+                            if resolved_target and resolved_target == Path('/opt/vertica/config'):
+                                remove_symlink = True
+
+                        if remove_symlink:
+                            log(
+                                f'Removing confusing symlink {config_path} -> {target} '
+                                'to allow Vertica to recreate configuration files'
+                            )
+                            try:
+                                config_path.unlink()
+                            except OSError as exc:
+                                log(f'Unable to remove {config_path}: {exc}')
+                            else:
+                                continue
+
+                if config_path.exists() and config_path.is_dir():
+                    admintools_conf = config_path / 'admintools.conf'
+                    if not admintools_conf.exists():
+                        container_status = _docker_inspect(
+                            'vertica_ce', '{{.State.Status}}'
+                        )
+                        container_health = _docker_inspect(
+                            'vertica_ce', '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
+                        )
+                        should_preserve = (
+                            container_status in {'running', 'restarting'}
+                            and container_health == 'healthy'
+                        )
+
+                        if should_preserve:
+                            log(
+                                'Detected missing admintools.conf but Vertica '
+                                f'container is currently {container_status} '
+                                '(healthy); skipping directory removal to avoid '
+                                'disrupting the running container'
+                            )
+                        else:
+                            removal_attempted = False
+                            health_display = container_health or '<unknown>'
+                            status_display = container_status or '<absent>'
+                            if container_status in {'running', 'restarting'}:
+                                log(
+                                    'Detected missing admintools.conf while '
+                                    f'container status is {status_display} with '
+                                    f'health {health_display}; stopping vertica_ce '
+                                    'container to allow configuration rebuild'
+                                )
+                                removal_attempted = True
+                                try:
+                                    removal = subprocess.run(
+                                        ['docker', 'rm', '-f', 'vertica_ce'],
+                                        capture_output=True,
+                                        text=True,
+                                    )
+                                except FileNotFoundError:
+                                    log(
+                                        'Docker CLI unavailable while attempting to '
+                                        'remove vertica_ce container; continuing '
+                                        'with directory cleanup'
+                                    )
+                                else:
+                                    if removal.stdout:
+                                        log(removal.stdout.rstrip())
+                                    if removal.stderr:
+                                        log(f'[stderr] {removal.stderr.rstrip()}')
+                                    if removal.returncode != 0:
+                                        log(
+                                            'Failed to remove vertica_ce container '
+                                            f'prior to configuration cleanup: exit '
+                                            f'code {removal.returncode}'
+                                        )
+                            else:
+                                log(
+                                    'Detected missing admintools.conf while '
+                                    f'container status is {status_display} with '
+                                    f'health {health_display}; removing incomplete '
+                                    'data directory to allow Vertica to rebuild it '
+                                    'during startup'
+                                )
+                            if removal_attempted:
+                                log(
+                                    'Removing incomplete Vertica data directory at '
+                                    f'{vertica_root} (admintools.conf missing) '
+                                    'after stopping container'
+                                )
+                            else:
+                                log(
+                                    'Removing incomplete Vertica data directory at '
+                                    f'{vertica_root} (admintools.conf missing) to '
+                                    'allow Vertica to rebuild it during startup'
+                                )
+                            try:
+                                shutil.rmtree(vertica_root)
+                            except FileNotFoundError:
+                                pass
+                            except OSError as exc:
+                                log(f'Unable to remove {vertica_root}: {exc}')
+                            else:
+                                _ensure_directory(vertica_root)
+                                _seed_default_admintools_conf(vertica_root / 'config')
+                            continue
+
+            # When the Vertica container starts for the first time it populates the
+            # ``config`` directory with critical bootstrap files such as
+            # ``admintools.conf``.  Creating the directory ahead of time confuses the
+            # container's bootstrap logic (the source and destination of the
+            # configuration copy become identical) which in turn leaves the
+            # configuration incomplete.  Only adjust permissions when the directory
+            # already exists and otherwise allow the container to create it during
+            # startup.
+            if config_path.exists():
+                _ensure_directory(config_path)
+                _seed_default_admintools_conf(config_path)
 
 
 def _seed_default_admintools_conf(config_dir: Path) -> None:
@@ -546,19 +598,26 @@ def _reset_vertica_data_directories() -> bool:
     removed_any = False
 
     for base_path in VERTICA_DATA_DIRECTORIES:
-        vertica_root = base_path / 'vertica'
-        if not vertica_root.exists():
-            continue
+        for vertica_root in _candidate_vertica_roots(base_path) or [base_path / 'vertica']:
+            if not vertica_root.exists():
+                continue
 
-        log(f'Removing Vertica data directory at {vertica_root}')
-        try:
-            shutil.rmtree(vertica_root)
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            log(f'Unable to remove {vertica_root}: {exc}')
-        else:
-            removed_any = True
+            if vertica_root == base_path:
+                log(
+                    f'Skipping removal of base data directory {vertica_root} '
+                    'while attempting reset'
+                )
+                continue
+
+            log(f'Removing Vertica data directory at {vertica_root}')
+            try:
+                shutil.rmtree(vertica_root)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                log(f'Unable to remove {vertica_root}: {exc}')
+            else:
+                removed_any = True
 
     return removed_any
 
