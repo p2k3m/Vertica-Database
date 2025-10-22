@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -245,6 +246,47 @@ def test_ensure_known_identity_aligns_vertica_admin(tmp_path, monkeypatch):
     smoke._ensure_known_identity(target)
 
     assert calls == [target]
+
+
+def test_vertica_admin_identity_candidates_uses_container_identity(monkeypatch):
+    def missing_user(name: str):
+        raise KeyError(name)
+
+    def fake_getpwuid(uid: int):
+        raise KeyError(uid)
+
+    monkeypatch.setattr(smoke.pwd, 'getpwnam', missing_user)
+    monkeypatch.setattr(smoke.pwd, 'getpwuid', fake_getpwuid)
+    monkeypatch.setattr(smoke, '_container_dbadmin_identity', lambda container: (1000, 1001))
+
+    candidates = smoke._vertica_admin_identity_candidates()
+
+    assert candidates == [(1000, 1001)]
+
+
+def test_vertica_admin_identity_candidates_includes_known_fallback(monkeypatch):
+    def missing_user(name: str):
+        raise KeyError(name)
+
+    fallback_entry = SimpleNamespace(
+        pw_uid=smoke.VERTICA_ADMIN_FALLBACK_UID,
+        pw_gid=smoke.VERTICA_ADMIN_FALLBACK_GID,
+    )
+
+    def fake_getpwuid(uid: int):
+        if uid == smoke.VERTICA_ADMIN_FALLBACK_UID:
+            return fallback_entry
+        raise KeyError(uid)
+
+    monkeypatch.setattr(smoke.pwd, 'getpwnam', missing_user)
+    monkeypatch.setattr(smoke.pwd, 'getpwuid', fake_getpwuid)
+    monkeypatch.setattr(smoke, '_container_dbadmin_identity', lambda container: None)
+
+    candidates = smoke._vertica_admin_identity_candidates()
+
+    assert candidates == [
+        (smoke.VERTICA_ADMIN_FALLBACK_UID, smoke.VERTICA_ADMIN_FALLBACK_GID)
+    ]
 
 
 def test_ensure_container_admintools_conf_readable_adjusts(monkeypatch):

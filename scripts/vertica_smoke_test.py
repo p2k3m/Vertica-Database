@@ -131,17 +131,34 @@ def _vertica_admin_identity_candidates() -> list[tuple[int, int]]:
         try:
             entry = pwd.getpwnam(name)
         except KeyError:
-            if name == BOOTSTRAP_ADMIN_DEFAULT_USER:
-                fallback = (VERTICA_ADMIN_FALLBACK_UID, VERTICA_ADMIN_FALLBACK_GID)
-                if fallback not in seen:
-                    candidates.append(fallback)
-                    seen.add(fallback)
             continue
         except OSError as exc:
             log(f'Unable to resolve passwd entry for {name!r}: {exc}')
             continue
 
         pair = (entry.pw_uid, entry.pw_gid)
+        if pair not in seen:
+            candidates.append(pair)
+            seen.add(pair)
+
+    container_identity = _container_dbadmin_identity('vertica_ce')
+    if container_identity is not None and container_identity not in seen:
+        candidates.append(container_identity)
+        seen.add(container_identity)
+
+    try:
+        fallback_entry = pwd.getpwuid(VERTICA_ADMIN_FALLBACK_UID)
+    except KeyError:
+        fallback_entry = None
+    except OSError as exc:
+        log(
+            'Unable to resolve fallback Vertica admin identity '
+            f'uid {VERTICA_ADMIN_FALLBACK_UID}: {exc}'
+        )
+        fallback_entry = None
+
+    if fallback_entry is not None:
+        pair = (fallback_entry.pw_uid, fallback_entry.pw_gid)
         if pair not in seen:
             candidates.append(pair)
             seen.add(pair)
