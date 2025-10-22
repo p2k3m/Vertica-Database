@@ -415,12 +415,45 @@ def _ensure_known_identity(path: Path) -> None:
     gid = stat_info.st_gid
 
     needs_adjustment = False
+    preserve_unknown_identity = False
+
+    def _is_within_vertica_data_directories(candidate: Path) -> bool:
+        try:
+            resolved_candidate = candidate.resolve()
+        except OSError:
+            resolved_candidate = candidate
+
+        for base in VERTICA_DATA_DIRECTORIES:
+            try:
+                resolved_base = base.resolve()
+            except OSError:
+                resolved_base = base
+
+            if resolved_candidate == resolved_base:
+                return True
+
+            try:
+                if resolved_candidate.is_relative_to(resolved_base):
+                    return True
+            except AttributeError:
+                # Python <3.9 compatibility (is_relative_to not available).
+                try:
+                    resolved_candidate.relative_to(resolved_base)
+                except ValueError:
+                    continue
+                else:
+                    return True
+
+        return False
 
     try:
         pwd.getpwuid(uid)
     except KeyError:
         needs_adjustment = True
-        uid = 0
+        if _is_within_vertica_data_directories(path):
+            preserve_unknown_identity = True
+        else:
+            uid = 0
     except OSError as exc:
         log(f'Unable to resolve user for {path}: {exc}')
 
@@ -428,9 +461,20 @@ def _ensure_known_identity(path: Path) -> None:
         grp.getgrgid(gid)
     except KeyError:
         needs_adjustment = True
-        gid = 0
+        if _is_within_vertica_data_directories(path):
+            preserve_unknown_identity = True
+        else:
+            gid = 0
     except OSError as exc:
         log(f'Unable to resolve group for {path}: {exc}')
+
+    if preserve_unknown_identity:
+        log(
+            'Skipping ownership adjustment on '
+            f'{path} because it is managed by the Vertica container '
+            'and uses a UID/GID not present on the host'
+        )
+        return
 
     if not needs_adjustment:
         return
