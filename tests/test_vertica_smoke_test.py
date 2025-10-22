@@ -225,6 +225,28 @@ def test_seed_default_admintools_conf_rebuilds_invalid_file(tmp_path, monkeypatc
     assert any('attempting to rebuild it with safe defaults' in entry for entry in logs)
 
 
+def test_ensure_known_identity_aligns_vertica_admin(tmp_path, monkeypatch):
+    base = tmp_path / 'vertica'
+    config_dir = base / 'config'
+    config_dir.mkdir(parents=True)
+    target = config_dir / 'admintools.conf'
+    target.write_text('test')
+
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base], raising=False)
+    monkeypatch.setattr(smoke.os, 'geteuid', lambda: 0)
+
+    calls: list[Path] = []
+
+    def fake_align(path: Path) -> None:
+        calls.append(path)
+
+    monkeypatch.setattr(smoke, '_ensure_vertica_admin_identity', fake_align)
+
+    smoke._ensure_known_identity(target)
+
+    assert calls == [target]
+
+
 def test_ensure_container_admintools_conf_readable_adjusts(monkeypatch):
     logs: list[str] = []
     calls: list[list[str]] = []
