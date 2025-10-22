@@ -24,6 +24,8 @@ import vertica_python
 DB_NAME = 'VMart'
 DB_PORT = 5433
 BOOTSTRAP_ADMIN_DEFAULT_USER = 'dbadmin'
+VERTICA_ADMIN_FALLBACK_UID = 500
+VERTICA_ADMIN_FALLBACK_GID = 500
 ADMIN_USER = os.environ['ADMIN_USER']
 ADMIN_PASSWORD = os.environ['ADMIN_PASSWORD']
 
@@ -76,6 +78,115 @@ VERTICA_DATA_DIRECTORIES = [Path('/var/lib/vertica'), Path('/data/vertica')]
 # forcing ownership so that any future uid/gid changes continue to work.
 _VERTICA_DATA_DIR_MODE = 0o777
 _VERTICA_CONTAINER_ADMINTOOLS_PATH = '/opt/vertica/config/admintools.conf'
+
+
+def _is_within_vertica_data_directories(candidate: Path) -> bool:
+    """Return ``True`` when ``candidate`` is inside a known Vertica data root."""
+
+    try:
+        resolved_candidate = candidate.resolve()
+    except OSError:
+        resolved_candidate = candidate
+
+    for base in VERTICA_DATA_DIRECTORIES:
+        try:
+            resolved_base = base.resolve()
+        except OSError:
+            resolved_base = base
+
+        if resolved_candidate == resolved_base:
+            return True
+
+        try:
+            if resolved_candidate.is_relative_to(resolved_base):
+                return True
+        except AttributeError:
+            try:
+                resolved_candidate.relative_to(resolved_base)
+            except ValueError:
+                continue
+            else:
+                return True
+
+    return False
+
+
+def _vertica_admin_identity_candidates() -> list[tuple[int, int]]:
+    """Return potential ``(uid, gid)`` pairs for the Vertica admin user."""
+
+    names: list[str] = []
+    for env_var in ('VERTICA_DB_USER', 'DBADMIN_USER'):
+        value = os.getenv(env_var)
+        if value:
+            stripped = value.strip()
+            if stripped:
+                names.append(stripped)
+
+    names.append(BOOTSTRAP_ADMIN_DEFAULT_USER)
+
+    candidates: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+
+    for name in names:
+        try:
+            entry = pwd.getpwnam(name)
+        except KeyError:
+            if name == BOOTSTRAP_ADMIN_DEFAULT_USER:
+                fallback = (VERTICA_ADMIN_FALLBACK_UID, VERTICA_ADMIN_FALLBACK_GID)
+                if fallback not in seen:
+                    candidates.append(fallback)
+                    seen.add(fallback)
+            continue
+        except OSError as exc:
+            log(f'Unable to resolve passwd entry for {name!r}: {exc}')
+            continue
+
+        pair = (entry.pw_uid, entry.pw_gid)
+        if pair not in seen:
+            candidates.append(pair)
+            seen.add(pair)
+
+    return candidates
+
+
+def _ensure_vertica_admin_identity(path: Path) -> None:
+    """Attempt to align ``path`` ownership with the Vertica admin identity."""
+
+    if os.geteuid() != 0:
+        return
+
+    if not _is_within_vertica_data_directories(path):
+        return
+
+    try:
+        stat_info = path.stat()
+    except OSError as exc:
+        log(f'Unable to inspect ownership of {path} while aligning with Vertica admin: {exc}')
+        return
+
+    candidates = _vertica_admin_identity_candidates()
+    if not candidates:
+        return
+
+    for uid, gid in candidates:
+        if stat_info.st_uid == uid and stat_info.st_gid == gid:
+            return
+
+    for uid, gid in candidates:
+        try:
+            os.chown(path, uid, gid)
+        except OSError as exc:
+            log(
+                'Unable to adjust ownership on '
+                f'{path} to uid {uid} gid {gid} for Vertica admin compatibility: {exc}'
+            )
+            continue
+        else:
+            log(
+                'Adjusted ownership on '
+                f'{path} to uid {uid} gid {gid} for Vertica admin compatibility'
+            )
+            return
 
 DEFAULT_ADMINTOOLS_CONF = textwrap.dedent(
     """
@@ -460,35 +571,6 @@ def _ensure_known_identity(path: Path) -> None:
     needs_adjustment = False
     preserve_unknown_identity = False
 
-    def _is_within_vertica_data_directories(candidate: Path) -> bool:
-        try:
-            resolved_candidate = candidate.resolve()
-        except OSError:
-            resolved_candidate = candidate
-
-        for base in VERTICA_DATA_DIRECTORIES:
-            try:
-                resolved_base = base.resolve()
-            except OSError:
-                resolved_base = base
-
-            if resolved_candidate == resolved_base:
-                return True
-
-            try:
-                if resolved_candidate.is_relative_to(resolved_base):
-                    return True
-            except AttributeError:
-                # Python <3.9 compatibility (is_relative_to not available).
-                try:
-                    resolved_candidate.relative_to(resolved_base)
-                except ValueError:
-                    continue
-                else:
-                    return True
-
-        return False
-
     try:
         pwd.getpwuid(uid)
     except KeyError:
@@ -531,6 +613,9 @@ def _ensure_known_identity(path: Path) -> None:
             'Adjusted ownership on '
             f'{path} to uid {uid} gid {gid} to ensure Vertica tooling can resolve it'
         )
+
+    if _is_within_vertica_data_directories(path):
+        _ensure_vertica_admin_identity(path)
 
 
 def _ensure_known_identity_tree(path: Path, *, max_depth: int = 2) -> None:
