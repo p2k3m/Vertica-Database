@@ -51,6 +51,11 @@ STEP_SEPARATOR = '=' * 72
 # container during long but successful bootstraps.
 UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS = 900.0
 
+_EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
+    'VERTICA_EULA_ACCEPTED': '1',
+    'VERTICA_DB_EULA': 'accept',
+}
+
 
 def log(message: str) -> None:
     print(message, flush=True)
@@ -1528,6 +1533,74 @@ _COMPOSE_FILE_CANDIDATES = [
     Path('/opt/compose.yaml'),
 ]
 
+
+def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
+    """Ensure ``compose_file`` sets the environment variables for EULA acceptance."""
+
+    try:
+        original = compose_file.read_text()
+    except OSError as exc:
+        log(f'Unable to read {compose_file} while ensuring EULA acceptance: {exc}')
+        return False
+
+    missing = [
+        key
+        for key in _EULA_ENVIRONMENT_VARIABLES
+        if f'{key}=' not in original
+    ]
+
+    if not missing:
+        return False
+
+    lines = original.splitlines()
+    updated = False
+
+    for index, line in enumerate(lines):
+        if line.strip() != 'environment:':
+            continue
+
+        indent = line[: len(line) - len(line.lstrip())]
+        value_indent = indent + '  '
+
+        insert_position = index + 1
+        while insert_position < len(lines) and lines[insert_position].startswith(
+            value_indent + '- '
+        ):
+            insert_position += 1
+
+        new_entries = [
+            f"{value_indent}- {key}={_EULA_ENVIRONMENT_VARIABLES[key]}"
+            for key in _EULA_ENVIRONMENT_VARIABLES
+            if key in missing
+        ]
+
+        if not new_entries:
+            return False
+
+        lines = lines[:insert_position] + new_entries + lines[insert_position:]
+        updated = True
+        break
+
+    if not updated:
+        log(
+            f'Compose file {compose_file} lacks an environment block; unable to insert '
+            'EULA acceptance variables automatically'
+        )
+        return False
+
+    try:
+        compose_file.write_text('\n'.join(lines) + '\n')
+    except OSError as exc:
+        log(f'Unable to update {compose_file} with EULA acceptance variables: {exc}')
+        return False
+
+    log(
+        'Updated compose file {compose} to include Vertica EULA acceptance variables'.format(
+            compose=compose_file
+        )
+    )
+    return True
+
 _USER_DATA_PATHS = [
     Path('/var/lib/cloud/instance/user-data.txt'),
     Path('/var/lib/cloud/data/user-data'),
@@ -2086,6 +2159,7 @@ def ensure_vertica_container_running(
             if compose_missing_logged:
                 log('Compose file detected; attempting to start vertica_ce via docker compose')
                 compose_missing_logged = False
+            _ensure_compose_accepts_eula(compose_file)
             _ensure_ecr_login_if_needed(compose_file)
             _compose_up(compose_file)
             restart_attempts = 0
@@ -2182,6 +2256,7 @@ def ensure_vertica_container_running(
                 compose_file = _compose_file()
             if compose_file is not None and recreate_attempts < 2:
                 log('Vertica container remains unhealthy; recreating via docker compose')
+                _ensure_compose_accepts_eula(compose_file)
                 _ensure_ecr_login_if_needed(compose_file)
                 _compose_up(compose_file, force_recreate=True)
                 recreate_attempts += 1
@@ -2205,6 +2280,7 @@ def ensure_vertica_container_running(
                     unhealthy_logged_duration = None
                     last_unhealthy_log_dump = None
                     if compose_file is not None:
+                        _ensure_compose_accepts_eula(compose_file)
                         _ensure_ecr_login_if_needed(compose_file)
                         _compose_up(compose_file, force_recreate=True)
                     time.sleep(15)
