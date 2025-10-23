@@ -59,6 +59,16 @@ ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS = 300.0
 _EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
     'VERTICA_EULA_ACCEPTED': '1',
     'VERTICA_DB_EULA': 'accept',
+    # Newer Vertica container images ship an updated web-based Management Console
+    # agent that enforces its own EULA prompt during startup.  The agent shares
+    # the same container as the database which means that an unanswered prompt
+    # leaves the Docker health check stuck in an unhealthy state (the agent
+    # repeatedly attempts to display the license text and exits).  Accept the
+    # additional agreements up-front so the container can progress to a healthy
+    # state without requiring interactive acknowledgement.
+    'VERTICA_EULA': 'accept',
+    'VERTICA_MC_EULA': 'accept',
+    'VERTICA_MC_EULA_ACCEPTED': '1',
 }
 
 
