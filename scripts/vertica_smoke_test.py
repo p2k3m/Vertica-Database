@@ -544,8 +544,17 @@ def _sanitize_vertica_data_directories() -> None:
                         except OSError as exc:
                             log(f'Unable to remove {vertica_root}: {exc}')
                         else:
+                            # Recreate the Vertica root directory so Docker can
+                            # mount it, but avoid pre-populating the ``config``
+                            # subdirectory.  When ``config`` exists before the
+                            # container starts the bootstrap step that copies
+                            # default configuration files notices the source and
+                            # destination paths are identical and aborts the
+                            # copy.  This leaves ``admintools.conf`` missing
+                            # inside the container which prevents Vertica from
+                            # finishing startup.  Allow the container to
+                            # repopulate ``config`` from scratch instead.
                             _ensure_directory(vertica_root)
-                            _seed_default_admintools_conf(vertica_root / 'config')
                         continue
 
             # When the Vertica container starts for the first time it populates the
