@@ -161,25 +161,26 @@ def _vertica_admin_identity_candidates() -> list[tuple[int, int]]:
     # identifiers which allows us to align ownership with the container's
     # expected administrator identity ahead of time.
     for uid, gid in VERTICA_ADMIN_COMMON_IDENTITIES:
+        include_pair: Optional[tuple[int, int]]
         try:
             entry = pwd.getpwuid(uid)
         except KeyError:
-            entry = None
+            if container_identity == (uid, gid):
+                include_pair = container_identity
+            else:
+                continue
         except OSError as exc:
             log(
                 'Unable to resolve fallback Vertica admin identity '
                 f'uid {uid}: {exc}'
             )
-            entry = None
-
-        if entry is not None:
-            pair = (entry.pw_uid, entry.pw_gid)
+            continue
         else:
-            pair = (uid, gid)
+            include_pair = (entry.pw_uid, entry.pw_gid)
 
-        if pair not in seen:
-            candidates.append(pair)
-            seen.add(pair)
+        if include_pair not in seen:
+            candidates.append(include_pair)
+            seen.add(include_pair)
 
     return candidates
 
