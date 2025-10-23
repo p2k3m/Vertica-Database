@@ -86,6 +86,24 @@ def test_container_uptime_seconds_handles_zero_timestamp(monkeypatch):
     assert smoke._container_uptime_seconds('vertica_ce') == 0.0
 
 
+def test_container_restart_count(monkeypatch):
+    responses = {'{{.RestartCount}}': '3'}
+
+    monkeypatch.setattr(
+        smoke,
+        '_docker_inspect',
+        lambda container, template: responses.get(template),
+    )
+
+    assert smoke._container_restart_count('vertica_ce') == 3
+
+    responses['{{.RestartCount}}'] = ''
+    assert smoke._container_restart_count('vertica_ce') is None
+
+    responses['{{.RestartCount}}'] = 'invalid'
+    assert smoke._container_restart_count('vertica_ce') is None
+
+
 def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
     current_time = {'value': 0.0}
 
@@ -174,6 +192,48 @@ def test_ensure_vertica_resets_data_directories(monkeypatch):
 
     assert compose_calls == [True, True, True]
     assert reset_calls == [True]
+
+
+def test_sanitize_seeds_admintools_conf_after_restarts(tmp_path, monkeypatch):
+    base = tmp_path / 'data'
+    base.mkdir()
+    vertica_root = base / 'vertica'
+    vertica_root.mkdir()
+
+    logs: list[str] = []
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base])
+    monkeypatch.setattr(smoke, '_ensure_known_identity_tree', lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, '_ensure_known_identity', lambda path: None)
+    monkeypatch.setattr(smoke, '_ensure_vertica_admin_identity', lambda path: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 60.0)
+    monkeypatch.setattr(smoke, '_container_restart_count', lambda container: 3)
+
+    def fake_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return 'unhealthy'
+        raise AssertionError(f'unexpected template: {template}')
+
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_inspect)
+
+    seed_calls: list[Path] = []
+
+    def fake_seed(path: Path) -> bool:
+        seed_calls.append(path)
+        path.mkdir(parents=True, exist_ok=True)
+        return True
+
+    monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
+    monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda *args, **kwargs: False)
+
+    smoke._sanitize_vertica_data_directories()
+
+    assert seed_calls
+    expected_targets = {vertica_root / 'config', base / 'VMart' / 'config'}
+    assert set(seed_calls).issubset(expected_targets)
+    assert any('restart count' in entry for entry in logs)
 
 
 def test_seed_default_admintools_conf(tmp_path, monkeypatch):
