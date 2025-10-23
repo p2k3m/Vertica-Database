@@ -472,6 +472,11 @@ def _sanitize_vertica_data_directories() -> None:
                     )
                     if _seed_default_admintools_conf(config_path):
                         _ensure_known_identity_tree(config_path, max_depth=2)
+                        if _synchronize_container_admintools_conf('vertica_ce', admintools_conf):
+                            log(
+                                'Copied admintools.conf into Vertica container to '
+                                'assist recovery'
+                            )
                         log('Seeded default admintools.conf to assist Vertica recovery')
                         continue
 
@@ -1008,6 +1013,71 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
 
     return True
 
+
+def _synchronize_container_admintools_conf(container: str, source: Path) -> bool:
+    """Copy host ``admintools.conf`` into ``container`` when possible."""
+
+    if not source.exists():
+        return False
+
+    if shutil.which('docker') is None:
+        log('Docker CLI is not available while copying admintools.conf into container')
+        return False
+
+    container_parent = shlex.quote(str(Path(_VERTICA_CONTAINER_ADMINTOOLS_PATH).parent))
+    try:
+        mkdir_result = subprocess.run(
+            [
+                'docker',
+                'exec',
+                '--user',
+                '0',
+                container,
+                'sh',
+                '-c',
+                f'mkdir -p {container_parent}',
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while preparing admintools.conf directory inside container')
+        return False
+
+    if mkdir_result.stdout:
+        log(mkdir_result.stdout.rstrip())
+    if mkdir_result.stderr:
+        log(f'[stderr] {mkdir_result.stderr.rstrip()}')
+    if mkdir_result.returncode != 0:
+        log('Failed to prepare admintools.conf directory inside container')
+        return False
+
+    try:
+        copy_result = subprocess.run(
+            [
+                'docker',
+                'cp',
+                os.fspath(source),
+                f'{container}:{_VERTICA_CONTAINER_ADMINTOOLS_PATH}',
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while copying admintools.conf into container')
+        return False
+
+    if copy_result.stdout:
+        log(copy_result.stdout.rstrip())
+    if copy_result.stderr:
+        log(f'[stderr] {copy_result.stderr.rstrip()}')
+    if copy_result.returncode != 0:
+        log('Failed to copy admintools.conf into container')
+        return False
+
+    log('Copied admintools.conf into Vertica container from host data directory')
+
+    return True
 
 
 def _reset_vertica_data_directories() -> bool:
