@@ -136,14 +136,32 @@ jobs:
           echo "Instance registration detected: $ssm_entry"
 
           python - <<'PY'
+          import base64
+          import gzip
           import json
           import os
           import shlex
+          import textwrap
           from pathlib import Path
 
-          script = Path("scripts/vertica_smoke_test.py").read_text().rstrip()
+          script_path = Path("scripts/vertica_smoke_test.py")
           admin_user = os.environ["ADMIN_USER"]
           admin_password = os.environ["ADMIN_PASSWORD"]
+
+          encoded = base64.b64encode(gzip.compress(script_path.read_bytes())).decode("ascii")
+          encoded_lines = "\n".join(textwrap.wrap(encoded, 120))
+
+          decompress_command = "\n".join((
+              "python3 <<'PY'",
+              "import base64, gzip, pathlib",
+              "DATA = '''",
+              encoded_lines,
+              "'''",
+              "pathlib.Path('vertica_smoke_test.py').write_bytes(",
+              "    gzip.decompress(base64.b64decode(DATA))",
+              ")",
+              "PY",
+          ))
 
           env_parts = [
               f"ADMIN_USER={shlex.quote(admin_user)}",
@@ -155,7 +173,8 @@ jobs:
               "if ! python3 -m pip install --quiet --upgrade pip; then echo '[warn] Unable to upgrade pip; continuing with system-provided version'; fi",
               "python3 -m pip install --quiet 'urllib3<2'",
               "python3 -m pip install --quiet vertica-python",
-              f"{' '.join(env_parts)} python3 <<'PY'\n{script}\nPY",
+              decompress_command,
+              f"{' '.join(env_parts)} python3 vertica_smoke_test.py",
           ]
           Path("ssm-commands.json").write_text(
               json.dumps({"commands": commands}, indent=2)
