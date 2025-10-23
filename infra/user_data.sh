@@ -168,18 +168,18 @@ mkdir -p /var/lib/vertica
 if id -u dbadmin >/dev/null 2>&1; then
   target_uid="$(id -u dbadmin)"
   target_gid="$(id -g dbadmin)"
-  chown_target="${target_uid}:${target_gid}"
-  echo "[user-data] Ensuring /var/lib/vertica is owned by dbadmin (${chown_target})"
+  chown_target="$${target_uid}:$${target_gid}"
+  echo "[user-data] Ensuring /var/lib/vertica is owned by dbadmin ($${chown_target})"
 else
   # Amazon Linux 2023 no longer ships a dbadmin user by default. Vertica still
   # expects the data directory to be owned by UID/GID 500 (the in-container
   # dbadmin account). Fall back to that numeric ownership when the user does not
   # exist on the host so admintools sees the expected permissions.
   chown_target="500:500"
-  echo "[user-data] Host dbadmin user not present; forcing /var/lib/vertica ownership to ${chown_target}"
+  echo "[user-data] Host dbadmin user not present; forcing /var/lib/vertica ownership to $${chown_target}"
 fi
 
-chown -R "$chown_target" /var/lib/vertica
+chown -R "$${chown_target}" /var/lib/vertica
 chmod 777 /var/lib/vertica
 
 # Ensure the Vertica image is available locally before starting the service
