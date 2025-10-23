@@ -398,7 +398,10 @@ def _sanitize_vertica_data_directories() -> None:
                         log(f'Unable to inspect symlink {config_path}: {exc}')
                     else:
                         remove_symlink = False
-                        if target.startswith('/data') or target.startswith('data'):
+                        normalized_target = os.path.normpath(target)
+                        if normalized_target.startswith('/data') or normalized_target.startswith('data'):
+                            remove_symlink = True
+                        elif normalized_target == '/opt/vertica/config':
                             remove_symlink = True
                         else:
                             try:
