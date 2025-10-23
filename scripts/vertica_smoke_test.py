@@ -55,6 +55,9 @@ UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS = 900.0
 # still missing several minutes after the container is running we treat the
 # bootstrap as stuck and rebuild the directory.
 ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS = 300.0
+# Treat repeated container restarts as a bootstrap failure even if the uptime
+# grace period has not elapsed so we can seed ``admintools.conf`` proactively.
+ADMINTOOLS_CONF_MISSING_RESTART_THRESHOLD = 2
 
 _EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
     'VERTICA_EULA_ACCEPTED': '1',
@@ -445,32 +448,50 @@ def _sanitize_vertica_data_directories() -> None:
 
                 if container_status in {'running', 'restarting'}:
                     uptime = _container_uptime_seconds('vertica_ce')
-                    if uptime is None:
+                    restart_count = _container_restart_count('vertica_ce')
+                    restart_display = 'unknown' if restart_count is None else str(restart_count)
+
+                    if uptime is None and (
+                        restart_count is None
+                        or restart_count < ADMINTOOLS_CONF_MISSING_RESTART_THRESHOLD
+                    ):
                         log(
                             'Detected missing admintools.conf while Vertica '
                             f'container status is {status_display} with health '
-                            f'{health_display}; container uptime is '
-                            'unknown so allowing the running container to '
-                            'complete bootstrap before modifying the data '
-                            'directory'
+                            f'{health_display}; container uptime is unknown and '
+                            f'restart count {restart_display} is below the '
+                            'restart threshold so allowing the running '
+                            'container to complete bootstrap before modifying '
+                            'the data directory'
                         )
                         continue
 
-                    if uptime < ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS:
+                    if (
+                        uptime is not None
+                        and uptime < ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS
+                        and (
+                            restart_count is None
+                            or restart_count < ADMINTOOLS_CONF_MISSING_RESTART_THRESHOLD
+                        )
+                    ):
                         log(
                             'Detected missing admintools.conf while Vertica '
                             f'container status is {status_display} with health '
                             f'{health_display}; container uptime '
-                            f'{uptime:.0f}s is within grace period so '
-                            'allowing the running container to complete '
-                            'bootstrap before modifying the data directory'
+                            f'{uptime:.0f}s is within grace period and '
+                            f'restart count {restart_display} is below the '
+                            'restart threshold so allowing the running '
+                            'container to complete bootstrap before modifying '
+                            'the data directory'
                         )
                         continue
 
+                    uptime_display = 'unknown' if uptime is None else f'{uptime:.0f}s'
                     log(
                         'Detected missing admintools.conf while Vertica '
                         f'container status is {status_display} with health '
-                        f'{health_display} after uptime {uptime:.0f}s; '
+                        f'{health_display}; uptime {uptime_display} and restart '
+                        f'count {restart_display} exceed recovery thresholds; '
                         'attempting to seed default configuration to recover'
                     )
                     if _seed_default_admintools_conf(config_path):
@@ -1492,6 +1513,19 @@ def _container_uptime_seconds(container: str) -> Optional[float]:
         started_dt = started_dt.replace(tzinfo=timezone.utc)
 
     return max(0.0, (now - started_dt).total_seconds())
+
+
+def _container_restart_count(container: str) -> Optional[int]:
+    """Return the Docker restart count for ``container`` if available."""
+
+    raw_value = _docker_inspect(container, '{{.RestartCount}}')
+    if not raw_value:
+        return None
+
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _docker_compose_plugin_available() -> bool:
