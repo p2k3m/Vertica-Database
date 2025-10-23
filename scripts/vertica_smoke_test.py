@@ -1995,6 +1995,30 @@ def _ensure_ecr_login_if_needed(compose_file: Path) -> None:
     _ensure_ecr_login_for_image(image_name)
 
 
+def _container_is_responding() -> bool:
+    """Return ``True`` when Vertica accepts connections on localhost."""
+
+    try:
+        wait_for_port('127.0.0.1', DB_PORT, timeout=5.0)
+    except SystemExit:
+        return False
+
+    try:
+        bootstrap_user, bootstrap_password = _bootstrap_admin_credentials()
+    except SystemExit:
+        return False
+
+    return connect_and_query(
+        'health_override@localhost',
+        '127.0.0.1',
+        bootstrap_user,
+        bootstrap_password,
+        attempts=1,
+        delay=1.0,
+        fatal=False,
+    )
+
+
 def ensure_vertica_container_running(
     timeout: float = 1800.0, compose_timeout: float = 300.0
 ) -> None:
@@ -2015,6 +2039,7 @@ def ensure_vertica_container_running(
     health_log_count = 0
     last_unhealthy_log_dump: Optional[float] = None
     admintools_permissions_checked = False
+    last_direct_connect_attempt: Optional[float] = None
 
     compose_deadline = time.time() + compose_timeout
 
@@ -2113,6 +2138,18 @@ def ensure_vertica_container_running(
                         unhealthy_logged_duration = unhealthy_duration
                 time.sleep(10)
                 continue
+
+            if (
+                last_direct_connect_attempt is None
+                or now - last_direct_connect_attempt >= 60
+            ):
+                last_direct_connect_attempt = now
+                if _container_is_responding():
+                    log(
+                        'Vertica container health remains unhealthy but direct '
+                        'connection succeeded; proceeding despite health check'
+                    )
+                    return
 
             uptime = _container_uptime_seconds('vertica_ce')
             if uptime is None:
