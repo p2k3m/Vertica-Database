@@ -50,6 +50,11 @@ STEP_SEPARATOR = '=' * 72
 # generous grace period before attempting restarts so we do not thrash the
 # container during long but successful bootstraps.
 UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS = 900.0
+# During the first bootstrap Vertica is responsible for populating
+# ``admintools.conf`` inside the persistent data directory.  If the file is
+# still missing several minutes after the container is running we treat the
+# bootstrap as stuck and rebuild the directory.
+ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS = 300.0
 
 _EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
     'VERTICA_EULA_ACCEPTED': '1',
@@ -423,16 +428,37 @@ def _sanitize_vertica_data_directories() -> None:
                         health_display = container_health or '<unknown>'
 
                         if container_status in {'running', 'restarting'}:
+                            uptime = _container_uptime_seconds('vertica_ce')
+                            if uptime is None:
+                                log(
+                                    'Detected missing admintools.conf while Vertica '
+                                    f'container status is {status_display} with health '
+                                    f'{health_display}; container uptime is '
+                                    'unknown so allowing the running container to '
+                                    'complete bootstrap before modifying the data '
+                                    'directory'
+                                )
+                                continue
+
+                            if uptime < ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS:
+                                log(
+                                    'Detected missing admintools.conf while Vertica '
+                                    f'container status is {status_display} with health '
+                                    f'{health_display}; container uptime '
+                                    f'{uptime:.0f}s is within grace period so '
+                                    'allowing the running container to complete '
+                                    'bootstrap before modifying the data directory'
+                                )
+                                continue
+
                             log(
                                 'Detected missing admintools.conf while Vertica '
                                 f'container status is {status_display} with health '
-                                f'{health_display}; allowing the running container '
-                                'to complete bootstrap before modifying the data '
-                                'directory'
+                                f'{health_display} after uptime {uptime:.0f}s; '
+                                'forcing Vertica data directory rebuild to recover'
                             )
-                            continue
 
-                        if (
+                        elif (
                             container_status in {'created', 'paused', 'exited'}
                             and container_health == 'healthy'
                         ):
