@@ -156,6 +156,8 @@ services:
       - VERTICA_DB_NAME=${vertica_db_name}
       - VERTICA_DB_USER=${bootstrap_admin_username}
       - VERTICA_DB_PASSWORD=${bootstrap_admin_password}
+      - VERTICA_EULA_ACCEPTED=1
+      - VERTICA_DB_EULA=accept
 YAML
 
 mkdir -p /var/lib/vertica
