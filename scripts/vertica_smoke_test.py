@@ -414,83 +414,98 @@ def _sanitize_vertica_data_directories() -> None:
                         container_health = _docker_inspect(
                             'vertica_ce', '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
                         )
-                        should_preserve = (
-                            container_status in {'running', 'restarting'}
-                            and container_health == 'healthy'
-                        )
+                        status_display = container_status or '<absent>'
+                        health_display = container_health or '<unknown>'
 
-                        if should_preserve:
+                        if container_status in {'running', 'restarting'}:
+                            log(
+                                'Detected missing admintools.conf while Vertica '
+                                f'container status is {status_display} with health '
+                                f'{health_display}; allowing the running container '
+                                'to complete bootstrap before modifying the data '
+                                'directory'
+                            )
+                            continue
+
+                        if (
+                            container_status in {'created', 'paused', 'exited'}
+                            and container_health == 'healthy'
+                        ):
                             log(
                                 'Detected missing admintools.conf but Vertica '
-                                f'container is currently {container_status} '
-                                '(healthy); skipping directory removal to avoid '
-                                'disrupting the running container'
+                                f'container is {status_display} (healthy); '
+                                'skipping directory removal to avoid disrupting '
+                                'the container'
+                            )
+                            continue
+
+                        removal_attempted = False
+                        if container_status in {None, 'dead'}:
+                            log(
+                                'Detected missing admintools.conf while Vertica '
+                                f'container status is {status_display}; removing '
+                                'incomplete data directory to allow Vertica to '
+                                'rebuild it during startup'
                             )
                         else:
-                            removal_attempted = False
-                            health_display = container_health or '<unknown>'
-                            status_display = container_status or '<absent>'
-                            if container_status in {'running', 'restarting'}:
-                                log(
-                                    'Detected missing admintools.conf while '
-                                    f'container status is {status_display} with '
-                                    f'health {health_display}; stopping vertica_ce '
-                                    'container to allow configuration rebuild'
-                                )
-                                removal_attempted = True
-                                try:
-                                    removal = subprocess.run(
-                                        ['docker', 'rm', '-f', 'vertica_ce'],
-                                        capture_output=True,
-                                        text=True,
-                                    )
-                                except FileNotFoundError:
-                                    log(
-                                        'Docker CLI unavailable while attempting to '
-                                        'remove vertica_ce container; continuing '
-                                        'with directory cleanup'
-                                    )
-                                else:
-                                    if removal.stdout:
-                                        log(removal.stdout.rstrip())
-                                    if removal.stderr:
-                                        log(f'[stderr] {removal.stderr.rstrip()}')
-                                    if removal.returncode != 0:
-                                        log(
-                                            'Failed to remove vertica_ce container '
-                                            f'prior to configuration cleanup: exit '
-                                            f'code {removal.returncode}'
-                                        )
-                            else:
-                                log(
-                                    'Detected missing admintools.conf while '
-                                    f'container status is {status_display} with '
-                                    f'health {health_display}; removing incomplete '
-                                    'data directory to allow Vertica to rebuild it '
-                                    'during startup'
-                                )
-                            if removal_attempted:
-                                log(
-                                    'Removing incomplete Vertica data directory at '
-                                    f'{vertica_root} (admintools.conf missing) '
-                                    'after stopping container'
-                                )
-                            else:
-                                log(
-                                    'Removing incomplete Vertica data directory at '
-                                    f'{vertica_root} (admintools.conf missing) to '
-                                    'allow Vertica to rebuild it during startup'
-                                )
+                            log(
+                                'Detected missing admintools.conf while Vertica '
+                                f'container status is {status_display} with health '
+                                f'{health_display}; removing incomplete data '
+                                'directory to allow Vertica to rebuild it during '
+                                'startup'
+                            )
+
+                        if container_status:
+                            removal_attempted = True
                             try:
-                                shutil.rmtree(vertica_root)
+                                removal = subprocess.run(
+                                    ['docker', 'rm', '-f', 'vertica_ce'],
+                                    capture_output=True,
+                                    text=True,
+                                )
                             except FileNotFoundError:
-                                pass
-                            except OSError as exc:
-                                log(f'Unable to remove {vertica_root}: {exc}')
+                                removal_attempted = False
+                                log(
+                                    'Docker CLI unavailable while attempting to '
+                                    'remove vertica_ce container; continuing with '
+                                    'directory cleanup'
+                                )
                             else:
-                                _ensure_directory(vertica_root)
-                                _seed_default_admintools_conf(vertica_root / 'config')
-                            continue
+                                if removal.stdout:
+                                    log(removal.stdout.rstrip())
+                                if removal.stderr:
+                                    log(f'[stderr] {removal.stderr.rstrip()}')
+                                if removal.returncode != 0:
+                                    log(
+                                        'Failed to remove vertica_ce container prior '
+                                        f'to configuration cleanup: exit code '
+                                        f'{removal.returncode}'
+                                    )
+
+                        if removal_attempted:
+                            log(
+                                'Removing incomplete Vertica data directory at '
+                                f'{vertica_root} (admintools.conf missing) after '
+                                'stopping container'
+                            )
+                        else:
+                            log(
+                                'Removing incomplete Vertica data directory at '
+                                f'{vertica_root} (admintools.conf missing) to allow '
+                                'Vertica to rebuild it during startup'
+                            )
+
+                        try:
+                            shutil.rmtree(vertica_root)
+                        except FileNotFoundError:
+                            pass
+                        except OSError as exc:
+                            log(f'Unable to remove {vertica_root}: {exc}')
+                        else:
+                            _ensure_directory(vertica_root)
+                            _seed_default_admintools_conf(vertica_root / 'config')
+                        continue
 
             # When the Vertica container starts for the first time it populates the
             # ``config`` directory with critical bootstrap files such as
