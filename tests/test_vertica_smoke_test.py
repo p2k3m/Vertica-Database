@@ -226,6 +226,37 @@ def test_seed_default_admintools_conf_rebuilds_invalid_file(tmp_path, monkeypatc
     assert any('attempting to rebuild it with safe defaults' in entry for entry in logs)
 
 
+def test_synchronize_container_admintools_conf_success(tmp_path, monkeypatch):
+    source = tmp_path / 'admintools.conf'
+    source.write_text('test')
+
+    logs: list[str] = []
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda cmd: '/usr/bin/docker' if cmd == 'docker' else None)
+
+    def fake_run(args, capture_output=True, text=True, **kwargs):
+        if args[:3] == ['docker', 'exec', '--user']:
+            return subprocess.CompletedProcess(args, 0, '', '')
+        if args[:2] == ['docker', 'cp']:
+            return subprocess.CompletedProcess(args, 0, '', '')
+        raise AssertionError(args)
+
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    assert smoke._synchronize_container_admintools_conf('vertica_ce', source) is True
+    assert any('Copied admintools.conf into Vertica container' in entry for entry in logs)
+
+
+def test_synchronize_container_admintools_conf_missing_docker(tmp_path, monkeypatch):
+    source = tmp_path / 'admintools.conf'
+    source.write_text('test')
+
+    monkeypatch.setattr(smoke.shutil, 'which', lambda cmd: None)
+
+    assert smoke._synchronize_container_admintools_conf('vertica_ce', source) is False
+
+
 def test_ensure_known_identity_aligns_vertica_admin(tmp_path, monkeypatch):
     base = tmp_path / 'vertica'
     config_dir = base / 'config'
