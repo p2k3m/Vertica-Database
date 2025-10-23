@@ -182,7 +182,7 @@ def test_seed_default_admintools_conf(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke, 'log', logs.append)
 
     config_dir = tmp_path / 'config'
-    smoke._seed_default_admintools_conf(config_dir)
+    assert smoke._seed_default_admintools_conf(config_dir) is True
 
     conf_path = config_dir / 'admintools.conf'
     assert conf_path.exists()
@@ -198,12 +198,12 @@ def test_seed_default_admintools_conf_is_idempotent(tmp_path, monkeypatch):
     config_dir = tmp_path / 'config'
     config_dir.mkdir()
 
-    smoke._seed_default_admintools_conf(config_dir)
+    assert smoke._seed_default_admintools_conf(config_dir) is True
 
     existing = config_dir / 'admintools.conf'
     original_content = existing.read_text()
 
-    smoke._seed_default_admintools_conf(config_dir)
+    assert smoke._seed_default_admintools_conf(config_dir) is True
 
     assert existing.read_text() == original_content
 
@@ -218,7 +218,7 @@ def test_seed_default_admintools_conf_rebuilds_invalid_file(tmp_path, monkeypatc
     existing = config_dir / 'admintools.conf'
     existing.write_text('custom')
 
-    smoke._seed_default_admintools_conf(config_dir)
+    assert smoke._seed_default_admintools_conf(config_dir) is True
 
     content = existing.read_text()
     assert '[Configuration]' in content
