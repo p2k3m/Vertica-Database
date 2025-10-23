@@ -165,21 +165,23 @@ mkdir -p /var/lib/vertica
 # container starts as.  When the host does not provide a matching user we leave
 # ownership unchanged so the smoke test can discover the in-container identity
 # dynamically once Vertica starts.
+# Amazon Linux 2023 no longer ships a dbadmin user by default.  Avoid forcing
+# legacy UID/GID assumptions when the account is absent locally because newer
+# Vertica container images no longer use uid 500 for the dbadmin account.  This
+# mirrors the behaviour of the smoke test which relaxes ownership expectations
+# and instead relies on permissive directory modes so Vertica can manage the
+# contents with whichever identity the container provides.
 if id -u dbadmin >/dev/null 2>&1; then
   target_uid="$(id -u dbadmin)"
   target_gid="$(id -g dbadmin)"
   chown_target="$${target_uid}:$${target_gid}"
   echo "[user-data] Ensuring /var/lib/vertica is owned by dbadmin ($${chown_target})"
+  chown -R "$${chown_target}" /var/lib/vertica
 else
-  # Amazon Linux 2023 no longer ships a dbadmin user by default. Vertica still
-  # expects the data directory to be owned by UID/GID 500 (the in-container
-  # dbadmin account). Fall back to that numeric ownership when the user does not
-  # exist on the host so admintools sees the expected permissions.
-  chown_target="500:500"
-  echo "[user-data] Host dbadmin user not present; forcing /var/lib/vertica ownership to $${chown_target}"
+  echo "[user-data] Host dbadmin user not present; resetting /var/lib/vertica ownership to root:root"
+  chown -R root:root /var/lib/vertica
 fi
 
-chown -R "$${chown_target}" /var/lib/vertica
 chmod 777 /var/lib/vertica
 
 # Ensure the Vertica image is available locally before starting the service
