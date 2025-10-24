@@ -2414,6 +2414,7 @@ def ensure_vertica_container_running(
                 admintools_permissions_checked = True
                 if _ensure_container_admintools_conf_readable('vertica_ce'):
                     log('Relaxed admintools.conf permissions inside container; waiting for recovery')
+                    _sanitize_vertica_data_directories()
                     time.sleep(5)
                     continue
             if (
@@ -2424,13 +2425,14 @@ def ensure_vertica_container_running(
                     unhealthy_logged_duration is None
                     or unhealthy_duration - unhealthy_logged_duration >= 30
                     or unhealthy_duration < unhealthy_logged_duration
-                    ):
-                        log(
-                            'Vertica container health reported unhealthy but has '
-                            f'been unhealthy for {unhealthy_duration:.0f}s; '
-                            'waiting for recovery'
-                        )
-                        unhealthy_logged_duration = unhealthy_duration
+                ):
+                    log(
+                        'Vertica container health reported unhealthy but has '
+                        f'been unhealthy for {unhealthy_duration:.0f}s; '
+                        'waiting for recovery'
+                    )
+                    unhealthy_logged_duration = unhealthy_duration
+                _sanitize_vertica_data_directories()
                 time.sleep(10)
                 continue
 
@@ -2452,6 +2454,7 @@ def ensure_vertica_container_running(
                     'Vertica container health reported unhealthy but uptime '
                     'could not be determined; assuming the container is still starting'
                 )
+                _sanitize_vertica_data_directories()
                 time.sleep(10)
                 continue
             if uptime is not None and uptime < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS:
@@ -2460,6 +2463,7 @@ def ensure_vertica_container_running(
                     f'{uptime:.0f}s is within grace period; waiting for recovery'
                 )
                 unhealthy_logged_duration = unhealthy_duration
+                _sanitize_vertica_data_directories()
                 time.sleep(10)
                 continue
 
