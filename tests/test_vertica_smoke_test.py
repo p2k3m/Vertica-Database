@@ -199,6 +199,20 @@ def test_ensure_vertica_resets_data_directories(monkeypatch):
     assert reset_calls == [True]
 
 
+def test_candidate_vertica_roots_includes_base_when_config_missing(tmp_path):
+    base_path = tmp_path / 'data' / 'vertica'
+    base_path.mkdir(parents=True)
+
+    # ``DB_NAME`` defaults to ``VMart`` so create a directory to mimic the
+    # database-specific root while leaving ``config/`` absent to exercise the
+    # regression scenario.
+    (base_path / smoke.DB_NAME).mkdir()
+
+    candidates = smoke._candidate_vertica_roots(base_path)
+
+    assert base_path in candidates
+
+
 def test_ensure_vertica_rechecks_sanitize_during_unhealthy(monkeypatch):
     current_time = {'value': 0.0}
 
@@ -280,7 +294,11 @@ def test_sanitize_seeds_admintools_conf_after_restarts(tmp_path, monkeypatch):
     smoke._sanitize_vertica_data_directories()
 
     assert seed_calls
-    expected_targets = {vertica_root / 'config', base / 'VMart' / 'config'}
+    expected_targets = {
+        base / 'config',
+        vertica_root / 'config',
+        base / 'VMart' / 'config',
+    }
     assert set(seed_calls).issubset(expected_targets)
     assert any('restart count' in entry for entry in logs)
 
@@ -410,14 +428,14 @@ def test_sanitize_rebuilds_config_after_seed_timeout(tmp_path, monkeypatch):
 
     smoke._sanitize_vertica_data_directories()
 
-    assert seed_calls == [vertica_root / 'config']
+    assert seed_calls == [vertica_root / 'config', base / 'config']
     assert not removal_calls
 
     current_time['value'] = 10.0
 
     smoke._sanitize_vertica_data_directories()
 
-    assert removal_calls == [vertica_root]
+    assert removal_calls == [vertica_root, base]
     assert any('remains missing for' in entry for entry in logs)
 
     smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
