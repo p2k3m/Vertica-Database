@@ -329,9 +329,13 @@ def _candidate_vertica_roots(base_path: Path) -> list[Path]:
     for name in known_names:
         candidates.append(base_path / name)
 
-    config_dir = base_path / 'config'
-    if config_dir.exists():
-        candidates.append(base_path)
+    # Always consider ``base_path`` itself so callers can manage Vertica
+    # installations that persist shared configuration directly under the data
+    # directory (for example ``/data/vertica/config``).  Previous behaviour only
+    # included ``base_path`` when ``config/`` already existed which prevented the
+    # smoke test from creating the directory or seeding ``admintools.conf`` when
+    # the configuration tree was missing entirely.
+    candidates.append(base_path)
 
     try:
         for entry in base_path.iterdir():
