@@ -392,6 +392,7 @@ def _sanitize_vertica_data_directories() -> None:
         candidate_roots = _candidate_vertica_roots(base_path) or [base_path / 'vertica']
 
         for vertica_root in candidate_roots:
+            preexisting_root = vertica_root.exists()
             if vertica_root.exists() and vertica_root.is_symlink():
                 try:
                     target = os.readlink(vertica_root)
@@ -409,6 +410,19 @@ def _sanitize_vertica_data_directories() -> None:
                             log(f'Unable to remove {vertica_root}: {exc}')
 
             if not _ensure_directory(vertica_root):
+                continue
+
+            if not preexisting_root:
+                # Avoid seeding configuration in directories that were created
+                # solely for this run.  Fresh directories are empty by design
+                # and will be populated by the Vertica container during its
+                # initial bootstrap sequence.  Attempting to seed
+                # ``admintools.conf`` immediately can interfere with the
+                # container's first-run copy step (which expects to populate an
+                # empty target) and triggers bootstrap loops similar to the
+                # production failure this logic is mitigating.  Revisit the
+                # directory on the next pass once Vertica has created its
+                # expected structure.
                 continue
 
             config_path = vertica_root / 'config'
