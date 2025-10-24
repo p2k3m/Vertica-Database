@@ -674,25 +674,39 @@ def _sanitize_vertica_data_directories() -> None:
                                 f'{removal.returncode}'
                             )
 
+                removal_target = vertica_root
+                recreate_root = True
+
+                if vertica_root == base_path:
+                    # ``vertica_root`` may refer to the top-level Vertica data
+                    # directory (for example ``/data/vertica``).  Removing the
+                    # entire tree would delete unrelated cluster state such as
+                    # the ``VMart`` database and MC agent directories.  Focus
+                    # on the configuration subdirectory instead so the
+                    # container can repopulate ``config`` without disrupting
+                    # other persistent data.
+                    removal_target = config_path
+                    recreate_root = False
+
                 if removal_attempted:
                     log(
                         'Removing incomplete Vertica data directory at '
-                        f'{vertica_root} (admintools.conf missing) after '
+                        f'{removal_target} (admintools.conf missing) after '
                         'stopping container'
                     )
                 else:
                     log(
                         'Removing incomplete Vertica data directory at '
-                        f'{vertica_root} (admintools.conf missing) to allow '
+                        f'{removal_target} (admintools.conf missing) to allow '
                         'Vertica to rebuild it during startup'
                     )
 
                 try:
-                    shutil.rmtree(vertica_root)
+                    shutil.rmtree(removal_target)
                 except FileNotFoundError:
                     pass
                 except OSError as exc:
-                    log(f'Unable to remove {vertica_root}: {exc}')
+                    log(f'Unable to remove {removal_target}: {exc}')
                 else:
                     # Recreate the Vertica root directory so Docker can
                     # mount it, but avoid pre-populating the ``config``
@@ -704,7 +718,10 @@ def _sanitize_vertica_data_directories() -> None:
                     # inside the container which prevents Vertica from
                     # finishing startup.  Allow the container to
                     # repopulate ``config`` from scratch instead.
-                    _ensure_directory(vertica_root)
+                    if recreate_root:
+                        _ensure_directory(vertica_root)
+                    else:
+                        _ensure_directory(base_path)
                     _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
                     _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
                 continue
