@@ -507,7 +507,7 @@ def test_sanitize_rebuilds_config_after_seed_timeout(tmp_path, monkeypatch):
 
     smoke._sanitize_vertica_data_directories()
 
-    assert removal_calls == [vertica_root, base]
+    assert removal_calls == [vertica_root, base / 'config']
     assert any('remains missing for' in entry for entry in logs)
 
     smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
