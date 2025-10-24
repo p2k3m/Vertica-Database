@@ -277,6 +277,7 @@ def test_sanitize_seeds_admintools_conf_after_missing_duration(tmp_path, monkeyp
     monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
     monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda *args, **kwargs: False)
     smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
+    smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
 
     smoke._sanitize_vertica_data_directories()
     assert not seed_calls
@@ -288,6 +289,82 @@ def test_sanitize_seeds_admintools_conf_after_missing_duration(tmp_path, monkeyp
     assert seed_calls
     assert any('missing for' in entry for entry in logs)
     smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
+    smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
+
+
+def test_sanitize_rebuilds_config_after_seed_timeout(tmp_path, monkeypatch):
+    base = tmp_path / 'data'
+    base.mkdir()
+    vertica_root = base / 'vertica'
+    vertica_root.mkdir()
+
+    logs: list[str] = []
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base])
+    monkeypatch.setattr(smoke, '_ensure_known_identity_tree', lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, '_ensure_known_identity', lambda path: None)
+    monkeypatch.setattr(smoke, '_ensure_vertica_admin_identity', lambda path: None)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 600.0)
+    monkeypatch.setattr(smoke, '_container_restart_count', lambda container: 0)
+    monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda *args, **kwargs: True)
+    monkeypatch.setattr(smoke, 'ADMINTOOLS_CONF_SEED_RECOVERY_SECONDS', 5.0)
+
+    def fake_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return 'unhealthy'
+        raise AssertionError(template)
+
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_inspect)
+
+    seed_calls: list[Path] = []
+
+    def fake_seed(path: Path) -> bool:
+        seed_calls.append(path)
+        path.mkdir(parents=True, exist_ok=True)
+        return True
+
+    monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
+
+    removal_calls: list[Path] = []
+
+    def fake_rmtree(path: Path) -> None:
+        removal_calls.append(path)
+
+    monkeypatch.setattr(smoke.shutil, 'rmtree', fake_rmtree)
+
+    def fake_run(args, capture_output=True, text=True, **kwargs):
+        if args == ['docker', 'rm', '-f', 'vertica_ce']:
+            return subprocess.CompletedProcess(args, 0, '', '')
+        raise AssertionError(args)
+
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
+    smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
+
+    smoke._sanitize_vertica_data_directories()
+
+    assert seed_calls == [vertica_root / 'config']
+    assert not removal_calls
+
+    current_time['value'] = 10.0
+
+    smoke._sanitize_vertica_data_directories()
+
+    assert removal_calls == [vertica_root]
+    assert any('remains missing for' in entry for entry in logs)
+
+    smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
+    smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
 
 
 def test_seed_default_admintools_conf(tmp_path, monkeypatch):
