@@ -569,8 +569,10 @@ def _sanitize_vertica_data_directories() -> None:
                             f'count {restart_display} exceed recovery thresholds; '
                             'attempting to seed default configuration to recover'
                         )
-                    if _seed_default_admintools_conf(config_path):
-                        _ADMINTOOLS_CONF_SEEDED_AT[config_path] = time.time()
+                    seed_success, seed_changed = _seed_default_admintools_conf(config_path)
+                    if seed_success:
+                        if seed_changed:
+                            _ADMINTOOLS_CONF_SEEDED_AT[config_path] = time.time()
                         _ensure_known_identity_tree(config_path, max_depth=2)
                         if _synchronize_container_admintools_conf('vertica_ce', admintools_conf):
                             log(
@@ -683,34 +685,44 @@ def _sanitize_vertica_data_directories() -> None:
                 _seed_default_admintools_conf(config_path)
 
 
-def _seed_default_admintools_conf(config_dir: Path) -> bool:
-    """Ensure ``admintools.conf`` exists with safe defaults."""
+def _seed_default_admintools_conf(config_dir: Path) -> tuple[bool, bool]:
+    """Ensure ``admintools.conf`` exists with safe defaults.
+
+    Returns a tuple ``(success, changed)`` where ``success`` indicates that the
+    configuration file is present (either because it already existed or was
+    created) and ``changed`` notes whether the call wrote a new file or updated
+    an invalid one.  Callers use ``changed`` to decide when to start recovery
+    timers so that repeated idempotent invocations do not continuously extend
+    the observation window for a missing configuration inside the container.
+    """
 
     admintools_conf = config_dir / 'admintools.conf'
+    needs_rebuild = False
     if admintools_conf.exists():
         if _admintools_conf_needs_rebuild(admintools_conf):
             log(
                 'Existing admintools.conf is missing critical configuration; '
                 'attempting to rebuild it with safe defaults'
             )
+            needs_rebuild = True
         else:
-            return True
+            return True, False
 
     if config_dir.exists() and config_dir.is_symlink():
         try:
             config_dir.unlink()
         except OSError as exc:
             log(f'Unable to remove symlinked config directory {config_dir}: {exc}')
-            return False
+            return False, False
 
     if not _ensure_directory(config_dir):
-        return False
+        return False, False
 
     try:
         admintools_conf.write_text(DEFAULT_ADMINTOOLS_CONF)
     except OSError as exc:
         log(f'Unable to write default admintools.conf at {admintools_conf}: {exc}')
-        return False
+        return False, False
 
     _align_identity_with_parent(admintools_conf)
 
@@ -724,7 +736,7 @@ def _seed_default_admintools_conf(config_dir: Path) -> bool:
 
     _ensure_known_identity(admintools_conf)
 
-    return True
+    return True, True
 
 
 def _align_identity_with_parent(path: Path) -> None:
