@@ -1158,6 +1158,62 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
     return True
 
 
+def _write_container_admintools_conf(container: str, content: str) -> bool:
+    """Write ``admintools.conf`` directly inside ``container`` when possible."""
+
+    if shutil.which('docker') is None:
+        log('Docker CLI is not available while writing admintools.conf inside container')
+        return False
+
+    target = _VERTICA_CONTAINER_ADMINTOOLS_PATH
+    quoted_target = shlex.quote(target)
+
+    if not content.endswith('\n'):
+        content += '\n'
+
+    heredoc = '__VERTICA_ADMINTOOLS_CONF__'
+    script = '\n'.join(
+        [
+            "set -e",
+            f"cat <<'{heredoc}' > {quoted_target}",
+            content,
+            heredoc,
+            f"chmod 666 {quoted_target} || true",
+        ]
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                'docker',
+                'exec',
+                '--user',
+                '0',
+                container,
+                'sh',
+                '-c',
+                script,
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while writing admintools.conf inside container')
+        return False
+
+    if result.stdout:
+        log(result.stdout.rstrip())
+    if result.stderr:
+        log(f'[stderr] {result.stderr.rstrip()}')
+
+    if result.returncode != 0:
+        log('Failed to write admintools.conf inside container using exec fallback')
+        return False
+
+    log('Seeded admintools.conf inside Vertica container using exec fallback')
+    return True
+
+
 def _synchronize_container_admintools_conf(container: str, source: Path) -> bool:
     """Copy host ``admintools.conf`` into ``container`` when possible."""
 
@@ -1170,6 +1226,12 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
 
     container_target = _VERTICA_CONTAINER_ADMINTOOLS_PATH
     container_parent = os.path.dirname(container_target)
+
+    try:
+        content = source.read_text()
+    except OSError as exc:
+        log(f'Unable to read admintools.conf for container synchronization: {exc}')
+        return False
 
     try:
         with tempfile.TemporaryDirectory() as staging_dir:
@@ -1227,8 +1289,8 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
     if copy_result.stderr:
         log(f'[stderr] {copy_result.stderr.rstrip()}')
     if copy_result.returncode != 0:
-        log('Failed to copy admintools.conf into container')
-        return False
+        log('Failed to copy admintools.conf into container via docker cp; attempting exec fallback')
+        return _write_container_admintools_conf(container, content)
 
     log('Copied admintools.conf into Vertica container from host data directory')
 
