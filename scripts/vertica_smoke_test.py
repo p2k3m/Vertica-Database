@@ -67,6 +67,7 @@ ADMINTOOLS_CONF_MISSING_RESTART_THRESHOLD = 2
 _EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
     'VERTICA_EULA_ACCEPTED': '1',
     'VERTICA_DB_EULA': 'ACCEPT',
+    'VERTICA_DB_EULA_ACCEPTED': '1',
     # Newer Vertica container images ship an updated web-based Management Console
     # agent that enforces its own EULA prompt during startup.  The agent shares
     # the same container as the database which means that an unanswered prompt
