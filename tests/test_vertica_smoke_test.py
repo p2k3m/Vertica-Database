@@ -236,6 +236,60 @@ def test_sanitize_seeds_admintools_conf_after_restarts(tmp_path, monkeypatch):
     assert any('restart count' in entry for entry in logs)
 
 
+def test_sanitize_seeds_admintools_conf_after_missing_duration(tmp_path, monkeypatch):
+    base = tmp_path / 'data'
+    base.mkdir()
+    vertica_root = base / 'vertica'
+    vertica_root.mkdir()
+
+    logs: list[str] = []
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base])
+    monkeypatch.setattr(smoke, '_ensure_known_identity_tree', lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, '_ensure_known_identity', lambda path: None)
+    monkeypatch.setattr(smoke, '_ensure_vertica_admin_identity', lambda path: None)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 10.0)
+    monkeypatch.setattr(smoke, '_container_restart_count', lambda container: 0)
+
+    def fake_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return 'unhealthy'
+        raise AssertionError(f'unexpected template: {template}')
+
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_inspect)
+
+    seed_calls: list[Path] = []
+
+    def fake_seed(path: Path) -> bool:
+        seed_calls.append(path)
+        path.mkdir(parents=True, exist_ok=True)
+        return True
+
+    monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
+    monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda *args, **kwargs: False)
+    smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
+
+    smoke._sanitize_vertica_data_directories()
+    assert not seed_calls
+
+    current_time['value'] = smoke.ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS + 1
+
+    smoke._sanitize_vertica_data_directories()
+
+    assert seed_calls
+    assert any('missing for' in entry for entry in logs)
+    smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
+
+
 def test_seed_default_admintools_conf(tmp_path, monkeypatch):
     logs: list[str] = []
 

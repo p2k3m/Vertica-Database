@@ -116,6 +116,15 @@ VERTICA_DATA_DIRECTORIES = [Path('/var/lib/vertica'), Path('/data/vertica')]
 _VERTICA_DATA_DIR_MODE = 0o777
 _VERTICA_CONTAINER_ADMINTOOLS_PATH = '/opt/vertica/config/admintools.conf'
 
+# Track when ``admintools.conf`` was first observed missing for each Vertica
+# data directory.  Some bootstrap failures repeatedly start the container and
+# leave the uptime below the normal grace period, which previously prevented the
+# recovery logic from ever attempting to seed a default configuration.  Record
+# the initial observation time so we can fall back to remediation once the
+# missing file persists beyond the configured threshold regardless of the
+# current container uptime.
+_ADMINTOOLS_CONF_MISSING_OBSERVED_AT: dict[Path, float] = {}
+
 
 def _is_within_vertica_data_directories(candidate: Path) -> bool:
     """Return ``True`` when ``candidate`` is inside a known Vertica data root."""
@@ -440,7 +449,9 @@ def _sanitize_vertica_data_directories() -> None:
                 _ensure_known_identity_tree(config_path, max_depth=2)
 
             admintools_conf = config_path / 'admintools.conf'
-            if not admintools_conf.exists():
+            if admintools_conf.exists():
+                _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+            else:
                 container_status = _docker_inspect(
                     'vertica_ce', '{{.State.Status}}'
                 )
@@ -450,14 +461,24 @@ def _sanitize_vertica_data_directories() -> None:
                 status_display = container_status or '<absent>'
                 health_display = container_health or '<unknown>'
 
+                observed_at = _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.get(config_path)
+                if observed_at is None:
+                    observed_at = time.time()
+                    _ADMINTOOLS_CONF_MISSING_OBSERVED_AT[config_path] = observed_at
+                missing_duration = time.time() - observed_at
+
                 if container_status in {'running', 'restarting'}:
                     uptime = _container_uptime_seconds('vertica_ce')
                     restart_count = _container_restart_count('vertica_ce')
                     restart_display = 'unknown' if restart_count is None else str(restart_count)
 
-                    if uptime is None and (
-                        restart_count is None
-                        or restart_count < ADMINTOOLS_CONF_MISSING_RESTART_THRESHOLD
+                    if (
+                        uptime is None
+                        and (
+                            restart_count is None
+                            or restart_count < ADMINTOOLS_CONF_MISSING_RESTART_THRESHOLD
+                        )
+                        and missing_duration < ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS
                     ):
                         log(
                             'Detected missing admintools.conf while Vertica '
@@ -477,6 +498,7 @@ def _sanitize_vertica_data_directories() -> None:
                             restart_count is None
                             or restart_count < ADMINTOOLS_CONF_MISSING_RESTART_THRESHOLD
                         )
+                        and missing_duration < ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS
                     ):
                         log(
                             'Detected missing admintools.conf while Vertica '
@@ -491,13 +513,23 @@ def _sanitize_vertica_data_directories() -> None:
                         continue
 
                     uptime_display = 'unknown' if uptime is None else f'{uptime:.0f}s'
-                    log(
-                        'Detected missing admintools.conf while Vertica '
-                        f'container status is {status_display} with health '
-                        f'{health_display}; uptime {uptime_display} and restart '
-                        f'count {restart_display} exceed recovery thresholds; '
-                        'attempting to seed default configuration to recover'
-                    )
+                    if missing_duration >= ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS:
+                        log(
+                            'Detected missing admintools.conf while Vertica '
+                            f'container status is {status_display} with health '
+                            f'{health_display}; missing for '
+                            f'{missing_duration:.0f}s which exceeds the grace '
+                            'period so attempting to seed default configuration '
+                            'to recover'
+                        )
+                    else:
+                        log(
+                            'Detected missing admintools.conf while Vertica '
+                            f'container status is {status_display} with health '
+                            f'{health_display}; uptime {uptime_display} and restart '
+                            f'count {restart_display} exceed recovery thresholds; '
+                            'attempting to seed default configuration to recover'
+                        )
                     if _seed_default_admintools_conf(config_path):
                         _ensure_known_identity_tree(config_path, max_depth=2)
                         if _synchronize_container_admintools_conf('vertica_ce', admintools_conf):
@@ -506,6 +538,7 @@ def _sanitize_vertica_data_directories() -> None:
                                 'assist recovery'
                             )
                         log('Seeded default admintools.conf to assist Vertica recovery')
+                        _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
                         continue
 
                     log(
@@ -600,6 +633,7 @@ def _sanitize_vertica_data_directories() -> None:
                     # finishing startup.  Allow the container to
                     # repopulate ``config`` from scratch instead.
                     _ensure_directory(vertica_root)
+                    _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
                 continue
 
             if config_path.exists():
