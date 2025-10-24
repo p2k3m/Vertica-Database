@@ -199,6 +199,78 @@ def test_ensure_vertica_resets_data_directories(monkeypatch):
     assert reset_calls == [True]
 
 
+def test_sanitize_retains_missing_observation_until_container_confirms(monkeypatch, tmp_path):
+    base_time = 1_700_000_000.0
+    vertica_root = tmp_path / 'vertica'
+    config_path = vertica_root / 'config'
+    config_path.mkdir(parents=True)
+
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [tmp_path])
+    monkeypatch.setattr(smoke, '_candidate_vertica_roots', lambda base: [vertica_root])
+    monkeypatch.setattr(smoke, '_ensure_directory', lambda path: path.mkdir(parents=True, exist_ok=True) or True)
+    monkeypatch.setattr(smoke, '_ensure_known_identity_tree', lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, '_align_identity_with_parent', lambda path: None)
+    monkeypatch.setattr(smoke, '_ensure_known_identity', lambda path: None)
+    monkeypatch.setattr(smoke, '_docker_inspect', lambda container, template: 'running' if template == '{{.State.Status}}' else 'unhealthy')
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 1000.0)
+    monkeypatch.setattr(smoke, '_container_restart_count', lambda container: 0)
+    monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda container, source: False)
+    monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: False)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+    monkeypatch.setattr(smoke.time, 'time', lambda: base_time)
+
+    smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT[config_path] = base_time - 600
+
+    try:
+        smoke._sanitize_vertica_data_directories()
+        assert (config_path / 'admintools.conf').exists()
+        assert smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT[config_path] == base_time - 600
+        assert smoke._ADMINTOOLS_CONF_SEEDED_AT[config_path] == base_time
+    finally:
+        smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+        smoke._ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
+
+
+def test_sanitize_clears_missing_observation_when_container_has_config(monkeypatch, tmp_path):
+    base_time = 1_700_000_100.0
+    vertica_root = tmp_path / 'vertica'
+    config_path = vertica_root / 'config'
+    config_path.mkdir(parents=True)
+
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [tmp_path])
+    monkeypatch.setattr(smoke, '_candidate_vertica_roots', lambda base: [vertica_root])
+    monkeypatch.setattr(smoke, '_ensure_directory', lambda path: path.mkdir(parents=True, exist_ok=True) or True)
+    monkeypatch.setattr(smoke, '_ensure_known_identity_tree', lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, '_align_identity_with_parent', lambda path: None)
+    monkeypatch.setattr(smoke, '_ensure_known_identity', lambda path: None)
+    monkeypatch.setattr(smoke, '_docker_inspect', lambda container, template: 'running' if template == '{{.State.Status}}' else 'unhealthy')
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 1000.0)
+    monkeypatch.setattr(smoke, '_container_restart_count', lambda container: 0)
+
+    synchronized_sources: list[Path] = []
+
+    def fake_sync(container: str, source: Path) -> bool:
+        synchronized_sources.append(source)
+        return True
+
+    monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', fake_sync)
+    monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: True)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+    monkeypatch.setattr(smoke.time, 'time', lambda: base_time)
+
+    smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT[config_path] = base_time - 600
+
+    try:
+        smoke._sanitize_vertica_data_directories()
+        assert (config_path / 'admintools.conf').exists()
+        assert synchronized_sources == [config_path / 'admintools.conf']
+        assert config_path not in smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT
+        assert config_path not in smoke._ADMINTOOLS_CONF_SEEDED_AT
+    finally:
+        smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+        smoke._ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
+
+
 def test_candidate_vertica_roots_includes_base_when_config_missing(tmp_path):
     base_path = tmp_path / 'data' / 'vertica'
     base_path.mkdir(parents=True)
