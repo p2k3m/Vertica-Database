@@ -575,16 +575,41 @@ def _sanitize_vertica_data_directories() -> None:
                         )
                     seed_success, seed_changed = _seed_default_admintools_conf(config_path)
                     if seed_success:
-                        if seed_changed:
+                        if (
+                            seed_changed
+                            or config_path not in _ADMINTOOLS_CONF_SEEDED_AT
+                        ):
                             _ADMINTOOLS_CONF_SEEDED_AT[config_path] = time.time()
                         _ensure_known_identity_tree(config_path, max_depth=2)
-                        if _synchronize_container_admintools_conf('vertica_ce', admintools_conf):
+                        synchronized = _synchronize_container_admintools_conf(
+                            'vertica_ce', admintools_conf
+                        )
+                        if synchronized:
                             log(
                                 'Copied admintools.conf into Vertica container to '
                                 'assist recovery'
                             )
-                        log('Seeded default admintools.conf to assist Vertica recovery')
-                        _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+
+                        container_has_admintools = _container_path_exists(
+                            'vertica_ce', _VERTICA_CONTAINER_ADMINTOOLS_PATH
+                        )
+
+                        if container_has_admintools is True:
+                            log('Seeded default admintools.conf to assist Vertica recovery')
+                            _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+                            _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
+                        elif container_has_admintools is False:
+                            log(
+                                'Seeded default admintools.conf to assist Vertica '
+                                'recovery but configuration remains missing inside '
+                                'container; continuing to monitor'
+                            )
+                        else:
+                            log(
+                                'Seeded default admintools.conf to assist Vertica '
+                                'recovery but was unable to verify configuration '
+                                'inside container; continuing to monitor'
+                            )
                         continue
 
                     log(
@@ -1208,6 +1233,46 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
     log('Copied admintools.conf into Vertica container from host data directory')
 
     return True
+
+
+def _container_path_exists(container: str, path: str) -> Optional[bool]:
+    """Return ``True`` when ``path`` exists inside ``container``.
+
+    Returns ``None`` when the Docker CLI is unavailable or the existence check
+    fails for an unexpected reason (for example when the container is not
+    running).  Callers treat ``None`` as inconclusive so that recovery logic can
+    continue gathering evidence before attempting destructive remediation.
+    """
+
+    if shutil.which('docker') is None:
+        log('Docker CLI is not available while checking container path existence')
+        return None
+
+    try:
+        result = subprocess.run(
+            ['docker', 'exec', container, 'test', '-e', path],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while checking container path existence')
+        return None
+
+    if result.returncode == 0:
+        return True
+
+    if result.returncode == 1:
+        return False
+
+    if result.stdout:
+        log(result.stdout.rstrip())
+    if result.stderr:
+        log(f'[stderr] {result.stderr.rstrip()}')
+    log(
+        'Unable to determine container path existence because docker exec '
+        f'returned exit code {result.returncode}'
+    )
+    return None
 
 
 def _reset_vertica_data_directories() -> bool:
