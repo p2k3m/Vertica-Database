@@ -125,7 +125,12 @@ def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
         if template == '{{.State.Status}}':
             return 'running'
         if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
-            return next(health_states)
+            try:
+                return next(health_states)
+            except StopIteration:
+                return 'healthy'
+        if template == '{{.RestartCount}}':
+            return '0'
         raise AssertionError(f'Unexpected template: {template}')
 
     monkeypatch.setattr(smoke, '_ensure_docker_compose_cli', lambda: None)
@@ -260,10 +265,14 @@ def test_sanitize_seeds_admintools_conf_after_restarts(tmp_path, monkeypatch):
 
     seed_calls: list[Path] = []
 
-    def fake_seed(path: Path) -> bool:
+    seeded_paths: set[Path] = set()
+
+    def fake_seed(path: Path) -> tuple[bool, bool]:
         seed_calls.append(path)
         path.mkdir(parents=True, exist_ok=True)
-        return True
+        changed = path not in seeded_paths
+        seeded_paths.add(path)
+        return True, changed
 
     monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
     monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda *args, **kwargs: False)
@@ -309,10 +318,14 @@ def test_sanitize_seeds_admintools_conf_after_missing_duration(tmp_path, monkeyp
 
     seed_calls: list[Path] = []
 
-    def fake_seed(path: Path) -> bool:
+    seeded_paths: set[Path] = set()
+
+    def fake_seed(path: Path) -> tuple[bool, bool]:
         seed_calls.append(path)
         path.mkdir(parents=True, exist_ok=True)
-        return True
+        changed = path not in seeded_paths
+        seeded_paths.add(path)
+        return True, changed
 
     monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
     monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda *args, **kwargs: False)
@@ -367,10 +380,14 @@ def test_sanitize_rebuilds_config_after_seed_timeout(tmp_path, monkeypatch):
 
     seed_calls: list[Path] = []
 
-    def fake_seed(path: Path) -> bool:
+    seeded_paths: set[Path] = set()
+
+    def fake_seed(path: Path) -> tuple[bool, bool]:
         seed_calls.append(path)
         path.mkdir(parents=True, exist_ok=True)
-        return True
+        changed = path not in seeded_paths
+        seeded_paths.add(path)
+        return True, changed
 
     monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
 
@@ -413,7 +430,9 @@ def test_seed_default_admintools_conf(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke, 'log', logs.append)
 
     config_dir = tmp_path / 'config'
-    assert smoke._seed_default_admintools_conf(config_dir) is True
+    success, changed = smoke._seed_default_admintools_conf(config_dir)
+    assert success is True
+    assert changed is True
 
     conf_path = config_dir / 'admintools.conf'
     assert conf_path.exists()
@@ -429,12 +448,16 @@ def test_seed_default_admintools_conf_is_idempotent(tmp_path, monkeypatch):
     config_dir = tmp_path / 'config'
     config_dir.mkdir()
 
-    assert smoke._seed_default_admintools_conf(config_dir) is True
+    success, changed = smoke._seed_default_admintools_conf(config_dir)
+    assert success is True
+    assert changed is True
 
     existing = config_dir / 'admintools.conf'
     original_content = existing.read_text()
 
-    assert smoke._seed_default_admintools_conf(config_dir) is True
+    success, changed = smoke._seed_default_admintools_conf(config_dir)
+    assert success is True
+    assert changed is False
 
     assert existing.read_text() == original_content
 
@@ -449,7 +472,9 @@ def test_seed_default_admintools_conf_rebuilds_invalid_file(tmp_path, monkeypatc
     existing = config_dir / 'admintools.conf'
     existing.write_text('custom')
 
-    assert smoke._seed_default_admintools_conf(config_dir) is True
+    success, changed = smoke._seed_default_admintools_conf(config_dir)
+    assert success is True
+    assert changed is True
 
     content = existing.read_text()
     assert '[Configuration]' in content
