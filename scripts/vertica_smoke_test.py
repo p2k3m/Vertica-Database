@@ -1139,7 +1139,8 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
         log('Docker CLI is not available while copying admintools.conf into container')
         return False
 
-    container_parent = Path(_VERTICA_CONTAINER_ADMINTOOLS_PATH).parent
+    container_target = _VERTICA_CONTAINER_ADMINTOOLS_PATH
+    container_parent = os.path.dirname(container_target)
 
     try:
         with tempfile.TemporaryDirectory() as staging_dir:
@@ -1148,13 +1149,39 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
             shutil.copy2(source, staged_conf)
 
             try:
-                staging_source = os.path.join(staging_dir, '.')
+                mkdir_result = subprocess.run(
+                    [
+                        'docker',
+                        'exec',
+                        '--user',
+                        '0',
+                        container,
+                        'mkdir',
+                        '-p',
+                        container_parent,
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+            except FileNotFoundError:
+                log('Docker CLI is not available while preparing admintools.conf directory inside container')
+                return False
+
+            if mkdir_result.returncode != 0:
+                if mkdir_result.stdout:
+                    log(mkdir_result.stdout.rstrip())
+                if mkdir_result.stderr:
+                    log(f'[stderr] {mkdir_result.stderr.rstrip()}')
+                log('Failed to prepare admintools.conf directory inside container')
+                return False
+
+            try:
                 copy_result = subprocess.run(
                     [
                         'docker',
                         'cp',
-                        staging_source,
-                        f'{container}:{container_parent}',
+                        os.fspath(staged_conf),
+                        f'{container}:{container_target}',
                     ],
                     capture_output=True,
                     text=True,
