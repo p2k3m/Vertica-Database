@@ -151,7 +151,7 @@ services:
     ulimits:
       nofile: { soft: 65536, hard: 65536 }
     volumes:
-      - /var/lib/vertica:/data
+      - /var/lib/vertica:/data/vertica
     environment:
       - VERTICA_DB_NAME=${vertica_db_name}
       - VERTICA_DB_USER=${bootstrap_admin_username}
