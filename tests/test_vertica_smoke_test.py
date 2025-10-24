@@ -194,6 +194,46 @@ def test_ensure_vertica_resets_data_directories(monkeypatch):
     assert reset_calls == [True]
 
 
+def test_ensure_vertica_rechecks_sanitize_during_unhealthy(monkeypatch):
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    def fake_sleep(seconds: float) -> None:
+        current_time['value'] += seconds
+
+    health_states = iter(['unhealthy'] * 5 + ['healthy'])
+
+    def fake_docker_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return next(health_states)
+        raise AssertionError(f'Unexpected template: {template}')
+
+    sanitize_calls: list[float] = []
+
+    def fake_sanitize() -> None:
+        sanitize_calls.append(current_time['value'])
+
+    monkeypatch.setattr(smoke, '_ensure_docker_compose_cli', lambda: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 10.0)
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_docker_inspect)
+    monkeypatch.setattr(smoke, '_sanitize_vertica_data_directories', fake_sanitize)
+    monkeypatch.setattr(smoke, '_ensure_container_admintools_conf_readable', lambda container: False)
+    monkeypatch.setattr(smoke, '_log_container_tail', lambda container, tail=200: None)
+    monkeypatch.setattr(smoke, '_log_health_log_entries', lambda container, count: count)
+    monkeypatch.setattr(smoke, 'run_command', lambda command: None)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', fake_sleep)
+
+    smoke.ensure_vertica_container_running(timeout=120.0, compose_timeout=0.0)
+
+    assert sanitize_calls == [0.0, 10.0, 20.0, 30.0, 40.0]
+
+
 def test_sanitize_seeds_admintools_conf_after_restarts(tmp_path, monkeypatch):
     base = tmp_path / 'data'
     base.mkdir()
