@@ -59,9 +59,13 @@ ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS = 300.0
 # grace period has not elapsed so we can seed ``admintools.conf`` proactively.
 ADMINTOOLS_CONF_MISSING_RESTART_THRESHOLD = 2
 
+# Recent Vertica container images require the license acceptance tokens to use
+# uppercase ``ACCEPT`` rather than the lowercase values older releases accepted.
+# Normalise the values here so the automation remains compatible with both
+# behaviours.
 _EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
     'VERTICA_EULA_ACCEPTED': '1',
-    'VERTICA_DB_EULA': 'accept',
+    'VERTICA_DB_EULA': 'ACCEPT',
     # Newer Vertica container images ship an updated web-based Management Console
     # agent that enforces its own EULA prompt during startup.  The agent shares
     # the same container as the database which means that an unanswered prompt
@@ -69,8 +73,8 @@ _EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
     # repeatedly attempts to display the license text and exits).  Accept the
     # additional agreements up-front so the container can progress to a healthy
     # state without requiring interactive acknowledgement.
-    'VERTICA_EULA': 'accept',
-    'VERTICA_MC_EULA': 'accept',
+    'VERTICA_EULA': 'ACCEPT',
+    'VERTICA_MC_EULA': 'ACCEPT',
     'VERTICA_MC_EULA_ACCEPTED': '1',
 }
 
