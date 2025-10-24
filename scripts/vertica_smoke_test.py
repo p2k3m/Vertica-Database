@@ -115,6 +115,7 @@ VERTICA_DATA_DIRECTORIES = [Path('/var/lib/vertica'), Path('/data/vertica')]
 # forcing ownership so that any future uid/gid changes continue to work.
 _VERTICA_DATA_DIR_MODE = 0o777
 _VERTICA_CONTAINER_ADMINTOOLS_PATH = '/opt/vertica/config/admintools.conf'
+ADMINTOOLS_CONF_SEED_RECOVERY_SECONDS = 300.0
 
 # Track when ``admintools.conf`` was first observed missing for each Vertica
 # data directory.  Some bootstrap failures repeatedly start the container and
@@ -124,6 +125,11 @@ _VERTICA_CONTAINER_ADMINTOOLS_PATH = '/opt/vertica/config/admintools.conf'
 # missing file persists beyond the configured threshold regardless of the
 # current container uptime.
 _ADMINTOOLS_CONF_MISSING_OBSERVED_AT: dict[Path, float] = {}
+# Track when a default ``admintools.conf`` was last written for each Vertica
+# data directory.  When the file remains missing inside the container long after
+# seeding completes the most reliable recovery option is to rebuild the data
+# directory from scratch so the Vertica bootstrap logic can repopulate it.
+_ADMINTOOLS_CONF_SEEDED_AT: dict[Path, float] = {}
 
 
 def _is_within_vertica_data_directories(candidate: Path) -> bool:
@@ -451,6 +457,7 @@ def _sanitize_vertica_data_directories() -> None:
             admintools_conf = config_path / 'admintools.conf'
             if admintools_conf.exists():
                 _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+                _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
             else:
                 container_status = _docker_inspect(
                     'vertica_ce', '{{.State.Status}}'
@@ -467,7 +474,24 @@ def _sanitize_vertica_data_directories() -> None:
                     _ADMINTOOLS_CONF_MISSING_OBSERVED_AT[config_path] = observed_at
                 missing_duration = time.time() - observed_at
 
-                if container_status in {'running', 'restarting'}:
+                force_directory_rebuild = False
+                seeded_at = _ADMINTOOLS_CONF_SEEDED_AT.get(config_path)
+                if seeded_at is not None:
+                    since_seed = time.time() - seeded_at
+                    if since_seed >= ADMINTOOLS_CONF_SEED_RECOVERY_SECONDS:
+                        log(
+                            'admintools.conf remains missing for '
+                            f'{since_seed:.0f}s after seeding a default '
+                            'configuration; removing the Vertica data '
+                            'directory to allow bootstrap to repopulate it'
+                        )
+                        force_directory_rebuild = True
+                        _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
+
+                if (
+                    not force_directory_rebuild
+                    and container_status in {'running', 'restarting'}
+                ):
                     uptime = _container_uptime_seconds('vertica_ce')
                     restart_count = _container_restart_count('vertica_ce')
                     restart_display = 'unknown' if restart_count is None else str(restart_count)
@@ -531,6 +555,7 @@ def _sanitize_vertica_data_directories() -> None:
                             'attempting to seed default configuration to recover'
                         )
                     if _seed_default_admintools_conf(config_path):
+                        _ADMINTOOLS_CONF_SEEDED_AT[config_path] = time.time()
                         _ensure_known_identity_tree(config_path, max_depth=2)
                         if _synchronize_container_admintools_conf('vertica_ce', admintools_conf):
                             log(
@@ -634,6 +659,7 @@ def _sanitize_vertica_data_directories() -> None:
                     # repopulate ``config`` from scratch instead.
                     _ensure_directory(vertica_root)
                     _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+                    _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
                 continue
 
             if config_path.exists():
