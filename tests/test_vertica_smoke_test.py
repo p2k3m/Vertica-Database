@@ -599,6 +599,59 @@ def test_synchronize_container_admintools_conf_success(tmp_path, monkeypatch):
     assert any('Copied admintools.conf into Vertica container' in entry for entry in logs)
 
 
+def test_synchronize_container_admintools_conf_fallback(tmp_path, monkeypatch):
+    source = tmp_path / 'admintools.conf'
+    source.write_text('test')
+
+    logs: list[str] = []
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda cmd: '/usr/bin/docker' if cmd == 'docker' else None)
+
+    def fake_run(args, capture_output=True, text=True, **kwargs):
+        if args[:3] == ['docker', 'exec', '--user']:
+            if args[5:] == ['mkdir', '-p', '/opt/vertica/config']:
+                return subprocess.CompletedProcess(args, 0, '', '')
+            if args[5:7] == ['sh', '-c']:
+                script = args[7]
+                assert '__VERTICA_ADMINTOOLS_CONF__' in script
+                assert "/opt/vertica/config/admintools.conf" in script
+                return subprocess.CompletedProcess(args, 0, '', '')
+        if args[:2] == ['docker', 'cp']:
+            return subprocess.CompletedProcess(args, 1, '', 'cp failed')
+        raise AssertionError(args)
+
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    assert smoke._synchronize_container_admintools_conf('vertica_ce', source) is True
+    assert any('exec fallback' in entry for entry in logs)
+
+
+def test_synchronize_container_admintools_conf_fallback_failure(tmp_path, monkeypatch):
+    source = tmp_path / 'admintools.conf'
+    source.write_text('test')
+
+    logs: list[str] = []
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda cmd: '/usr/bin/docker' if cmd == 'docker' else None)
+
+    def fake_run(args, capture_output=True, text=True, **kwargs):
+        if args[:3] == ['docker', 'exec', '--user']:
+            if args[5:] == ['mkdir', '-p', '/opt/vertica/config']:
+                return subprocess.CompletedProcess(args, 0, '', '')
+            if args[5:7] == ['sh', '-c']:
+                return subprocess.CompletedProcess(args, 1, '', 'exec failed')
+        if args[:2] == ['docker', 'cp']:
+            return subprocess.CompletedProcess(args, 1, '', 'cp failed')
+        raise AssertionError(args)
+
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    assert smoke._synchronize_container_admintools_conf('vertica_ce', source) is False
+    assert any('Failed to write admintools.conf inside container using exec fallback' in entry for entry in logs)
+
+
 def test_synchronize_container_admintools_conf_missing_docker(tmp_path, monkeypatch):
     source = tmp_path / 'admintools.conf'
     source.write_text('test')
