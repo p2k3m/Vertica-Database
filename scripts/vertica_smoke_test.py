@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import uuid
@@ -1126,47 +1127,31 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
         log('Docker CLI is not available while copying admintools.conf into container')
         return False
 
-    container_parent = shlex.quote(str(Path(_VERTICA_CONTAINER_ADMINTOOLS_PATH).parent))
-    try:
-        mkdir_result = subprocess.run(
-            [
-                'docker',
-                'exec',
-                '--user',
-                '0',
-                container,
-                'sh',
-                '-c',
-                f'mkdir -p {container_parent}',
-            ],
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        log('Docker CLI is not available while preparing admintools.conf directory inside container')
-        return False
-
-    if mkdir_result.stdout:
-        log(mkdir_result.stdout.rstrip())
-    if mkdir_result.stderr:
-        log(f'[stderr] {mkdir_result.stderr.rstrip()}')
-    if mkdir_result.returncode != 0:
-        log('Failed to prepare admintools.conf directory inside container')
-        return False
+    container_parent = Path(_VERTICA_CONTAINER_ADMINTOOLS_PATH).parent
 
     try:
-        copy_result = subprocess.run(
-            [
-                'docker',
-                'cp',
-                os.fspath(source),
-                f'{container}:{_VERTICA_CONTAINER_ADMINTOOLS_PATH}',
-            ],
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        log('Docker CLI is not available while copying admintools.conf into container')
+        with tempfile.TemporaryDirectory() as staging_dir:
+            staging_path = Path(staging_dir)
+            staged_conf = staging_path / 'admintools.conf'
+            shutil.copy2(source, staged_conf)
+
+            try:
+                staging_source = os.path.join(staging_dir, '.')
+                copy_result = subprocess.run(
+                    [
+                        'docker',
+                        'cp',
+                        staging_source,
+                        f'{container}:{container_parent}',
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+            except FileNotFoundError:
+                log('Docker CLI is not available while copying admintools.conf into container')
+                return False
+    except OSError as exc:
+        log(f'Unable to stage admintools.conf for container synchronization: {exc}')
         return False
 
     if copy_result.stdout:

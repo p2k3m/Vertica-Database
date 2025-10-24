@@ -427,9 +427,9 @@ def test_synchronize_container_admintools_conf_success(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke.shutil, 'which', lambda cmd: '/usr/bin/docker' if cmd == 'docker' else None)
 
     def fake_run(args, capture_output=True, text=True, **kwargs):
-        if args[:3] == ['docker', 'exec', '--user']:
-            return subprocess.CompletedProcess(args, 0, '', '')
         if args[:2] == ['docker', 'cp']:
+            assert args[2].endswith('/.')
+            assert args[3] == 'vertica_ce:/opt/vertica/config'
             return subprocess.CompletedProcess(args, 0, '', '')
         raise AssertionError(args)
 
