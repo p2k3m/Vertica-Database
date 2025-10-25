@@ -661,6 +661,24 @@ def test_synchronize_container_admintools_conf_missing_docker(tmp_path, monkeypa
     assert smoke._synchronize_container_admintools_conf('vertica_ce', source) is False
 
 
+def test_container_admintools_conf_targets_for_known_roots():
+    host_path = Path('/var/lib/vertica/config/admintools.conf')
+
+    targets = smoke._container_admintools_conf_targets(host_path)
+
+    assert '/opt/vertica/config/admintools.conf' in targets
+    assert '/var/lib/vertica/config/admintools.conf' in targets
+    assert '/data/vertica/config/admintools.conf' in targets
+
+
+def test_container_admintools_conf_targets_for_unknown_root(tmp_path):
+    host_path = tmp_path / 'config' / 'admintools.conf'
+
+    targets = smoke._container_admintools_conf_targets(host_path)
+
+    assert targets == ['/opt/vertica/config/admintools.conf']
+
+
 def test_ensure_known_identity_aligns_vertica_admin(tmp_path, monkeypatch):
     base = tmp_path / 'vertica'
     config_dir = base / 'config'

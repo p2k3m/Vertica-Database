@@ -117,6 +117,15 @@ VERTICA_DATA_DIRECTORIES = [Path('/var/lib/vertica'), Path('/data/vertica')]
 # forcing ownership so that any future uid/gid changes continue to work.
 _VERTICA_DATA_DIR_MODE = 0o777
 _VERTICA_CONTAINER_ADMINTOOLS_PATH = '/opt/vertica/config/admintools.conf'
+# Map known host Vertica data directories to potential locations inside the
+# container.  Some infrastructure variants mount ``/var/lib/vertica`` from the
+# host into ``/data/vertica`` inside the container, while others keep the same
+# path on both sides of the bind mount.  Include both possibilities so recovery
+# logic can seed ``admintools.conf`` wherever Vertica expects it.
+_VERTICA_CONTAINER_DATA_DIRECTORY_MAPPINGS: dict[Path, tuple[str, ...]] = {
+    Path('/var/lib/vertica'): ('/var/lib/vertica', '/data/vertica'),
+    Path('/data/vertica'): ('/data/vertica',),
+}
 ADMINTOOLS_CONF_SEED_RECOVERY_SECONDS = 300.0
 
 # Track when ``admintools.conf`` was first observed missing for each Vertica
@@ -1176,15 +1185,16 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
     return True
 
 
-def _write_container_admintools_conf(container: str, content: str) -> bool:
-    """Write ``admintools.conf`` directly inside ``container`` when possible."""
+def _write_container_admintools_conf(container: str, target: str, content: str) -> bool:
+    """Write ``content`` to ``target`` inside ``container`` using ``docker exec``."""
 
     if shutil.which('docker') is None:
         log('Docker CLI is not available while writing admintools.conf inside container')
         return False
 
-    target = _VERTICA_CONTAINER_ADMINTOOLS_PATH
     quoted_target = shlex.quote(target)
+    parent = os.path.dirname(target) or '/'
+    quoted_parent = shlex.quote(parent)
 
     if not content.endswith('\n'):
         content += '\n'
@@ -1192,11 +1202,12 @@ def _write_container_admintools_conf(container: str, content: str) -> bool:
     heredoc = '__VERTICA_ADMINTOOLS_CONF__'
     script = '\n'.join(
         [
-            "set -e",
+            'set -e',
+            f'mkdir -p {quoted_parent}',
             f"cat <<'{heredoc}' > {quoted_target}",
             content,
             heredoc,
-            f"chmod 666 {quoted_target} || true",
+            f'chmod 666 {quoted_target} || true',
         ]
     )
 
@@ -1228,8 +1239,44 @@ def _write_container_admintools_conf(container: str, content: str) -> bool:
         log('Failed to write admintools.conf inside container using exec fallback')
         return False
 
-    log('Seeded admintools.conf inside Vertica container using exec fallback')
+    log(f'Seeded admintools.conf inside Vertica container at {target} using exec fallback')
     return True
+
+
+def _container_admintools_conf_targets(host_path: Path) -> list[str]:
+    """Return potential container paths for ``host_path``."""
+
+    targets: list[str] = []
+    seen: set[str] = set()
+
+    def add(path: str) -> None:
+        if path not in seen:
+            targets.append(path)
+            seen.add(path)
+
+    add(_VERTICA_CONTAINER_ADMINTOOLS_PATH)
+
+    try:
+        resolved_host = host_path.resolve(strict=False)
+    except OSError:
+        resolved_host = host_path
+
+    for host_base, container_bases in _VERTICA_CONTAINER_DATA_DIRECTORY_MAPPINGS.items():
+        try:
+            resolved_base = host_base.resolve(strict=False)
+        except OSError:
+            resolved_base = host_base
+
+        try:
+            relative = resolved_host.relative_to(resolved_base)
+        except ValueError:
+            continue
+
+        for container_base in container_bases:
+            candidate = Path(container_base) / relative
+            add(os.fspath(candidate))
+
+    return targets
 
 
 def _synchronize_container_admintools_conf(container: str, source: Path) -> bool:
@@ -1251,68 +1298,88 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
         log(f'Unable to read admintools.conf for container synchronization: {exc}')
         return False
 
+    targets = _container_admintools_conf_targets(source)
+    overall_success = True
+
     try:
         with tempfile.TemporaryDirectory() as staging_dir:
             staging_path = Path(staging_dir)
             staged_conf = staging_path / 'admintools.conf'
             shutil.copy2(source, staged_conf)
 
-            try:
-                mkdir_result = subprocess.run(
-                    [
-                        'docker',
-                        'exec',
-                        '--user',
-                        '0',
-                        container,
-                        'mkdir',
-                        '-p',
-                        container_parent,
-                    ],
-                    capture_output=True,
-                    text=True,
-                )
-            except FileNotFoundError:
-                log('Docker CLI is not available while preparing admintools.conf directory inside container')
-                return False
+            for container_target in targets:
+                container_parent = os.path.dirname(container_target) or '/'
 
-            if mkdir_result.returncode != 0:
-                if mkdir_result.stdout:
-                    log(mkdir_result.stdout.rstrip())
-                if mkdir_result.stderr:
-                    log(f'[stderr] {mkdir_result.stderr.rstrip()}')
-                log('Failed to prepare admintools.conf directory inside container')
-                return False
+                try:
+                    mkdir_result = subprocess.run(
+                        [
+                            'docker',
+                            'exec',
+                            '--user',
+                            '0',
+                            container,
+                            'mkdir',
+                            '-p',
+                            container_parent,
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                except FileNotFoundError:
+                    log('Docker CLI is not available while preparing admintools.conf directory inside container')
+                    return False
 
-            try:
-                copy_result = subprocess.run(
-                    [
-                        'docker',
-                        'cp',
-                        os.fspath(staged_conf),
-                        f'{container}:{container_target}',
-                    ],
-                    capture_output=True,
-                    text=True,
+                if mkdir_result.returncode != 0:
+                    if mkdir_result.stdout:
+                        log(mkdir_result.stdout.rstrip())
+                    if mkdir_result.stderr:
+                        log(f'[stderr] {mkdir_result.stderr.rstrip()}')
+                    log(
+                        'Failed to prepare admintools.conf directory inside container; '
+                        'attempting exec fallback'
+                    )
+                    if not _write_container_admintools_conf(container, container_target, content):
+                        overall_success = False
+                    continue
+
+                try:
+                    copy_result = subprocess.run(
+                        [
+                            'docker',
+                            'cp',
+                            os.fspath(staged_conf),
+                            f'{container}:{container_target}',
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                except FileNotFoundError:
+                    log('Docker CLI is not available while copying admintools.conf into container')
+                    return False
+
+                if copy_result.stdout:
+                    log(copy_result.stdout.rstrip())
+                if copy_result.stderr:
+                    log(f'[stderr] {copy_result.stderr.rstrip()}')
+
+                if copy_result.returncode != 0:
+                    log(
+                        'Failed to copy admintools.conf into container via docker cp; '
+                        'attempting exec fallback'
+                    )
+                    if not _write_container_admintools_conf(container, container_target, content):
+                        overall_success = False
+                    continue
+
+                log(
+                    'Copied admintools.conf into Vertica container at '
+                    f'{container_target} from host data directory'
                 )
-            except FileNotFoundError:
-                log('Docker CLI is not available while copying admintools.conf into container')
-                return False
     except OSError as exc:
         log(f'Unable to stage admintools.conf for container synchronization: {exc}')
         return False
 
-    if copy_result.stdout:
-        log(copy_result.stdout.rstrip())
-    if copy_result.stderr:
-        log(f'[stderr] {copy_result.stderr.rstrip()}')
-    if copy_result.returncode != 0:
-        log('Failed to copy admintools.conf into container via docker cp; attempting exec fallback')
-        return _write_container_admintools_conf(container, content)
-
-    log('Copied admintools.conf into Vertica container from host data directory')
-
-    return True
+    return overall_success
 
 
 def _container_path_exists(container: str, path: str) -> Optional[bool]:
