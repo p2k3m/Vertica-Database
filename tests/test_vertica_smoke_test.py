@@ -740,6 +740,8 @@ def test_synchronize_container_admintools_conf_success(tmp_path, monkeypatch):
         if args[:3] == ['docker', 'exec', '--user']:
             assert args[3] == '0'
             assert args[4] == 'vertica_ce'
+            if args[5:] == ['rm', '-f', '/opt/vertica/config/admintools.conf']:
+                return subprocess.CompletedProcess(args, 0, '', '')
             assert args[5:] == ['mkdir', '-p', '/opt/vertica/config']
             return subprocess.CompletedProcess(args, 0, '', '')
         if args[:2] == ['docker', 'cp']:
@@ -765,6 +767,8 @@ def test_synchronize_container_admintools_conf_fallback(tmp_path, monkeypatch):
 
     def fake_run(args, capture_output=True, text=True, **kwargs):
         if args[:3] == ['docker', 'exec', '--user']:
+            if args[5:] == ['rm', '-f', '/opt/vertica/config/admintools.conf']:
+                return subprocess.CompletedProcess(args, 0, '', '')
             if args[5:] == ['mkdir', '-p', '/opt/vertica/config']:
                 return subprocess.CompletedProcess(args, 0, '', '')
             if args[5:7] == ['sh', '-c']:
@@ -793,6 +797,8 @@ def test_synchronize_container_admintools_conf_fallback_failure(tmp_path, monkey
 
     def fake_run(args, capture_output=True, text=True, **kwargs):
         if args[:3] == ['docker', 'exec', '--user']:
+            if args[5:] == ['rm', '-f', '/opt/vertica/config/admintools.conf']:
+                return subprocess.CompletedProcess(args, 0, '', '')
             if args[5:] == ['mkdir', '-p', '/opt/vertica/config']:
                 return subprocess.CompletedProcess(args, 0, '', '')
             if args[5:7] == ['sh', '-c']:
