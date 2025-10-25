@@ -735,6 +735,7 @@ def test_synchronize_container_admintools_conf_success(tmp_path, monkeypatch):
 
     monkeypatch.setattr(smoke, 'log', logs.append)
     monkeypatch.setattr(smoke.shutil, 'which', lambda cmd: '/usr/bin/docker' if cmd == 'docker' else None)
+    monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: True)
 
     def fake_run(args, capture_output=True, text=True, **kwargs):
         if args[:3] == ['docker', 'exec', '--user']:
@@ -764,6 +765,7 @@ def test_synchronize_container_admintools_conf_fallback(tmp_path, monkeypatch):
 
     monkeypatch.setattr(smoke, 'log', logs.append)
     monkeypatch.setattr(smoke.shutil, 'which', lambda cmd: '/usr/bin/docker' if cmd == 'docker' else None)
+    monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: True)
 
     def fake_run(args, capture_output=True, text=True, **kwargs):
         if args[:3] == ['docker', 'exec', '--user']:
@@ -794,6 +796,7 @@ def test_synchronize_container_admintools_conf_fallback_failure(tmp_path, monkey
 
     monkeypatch.setattr(smoke, 'log', logs.append)
     monkeypatch.setattr(smoke.shutil, 'which', lambda cmd: '/usr/bin/docker' if cmd == 'docker' else None)
+    monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: True)
 
     def fake_run(args, capture_output=True, text=True, **kwargs):
         if args[:3] == ['docker', 'exec', '--user']:
@@ -811,6 +814,41 @@ def test_synchronize_container_admintools_conf_fallback_failure(tmp_path, monkey
 
     assert smoke._synchronize_container_admintools_conf('vertica_ce', source) is False
     assert any('Failed to write admintools.conf inside container using exec fallback' in entry for entry in logs)
+
+
+def test_synchronize_container_admintools_conf_exec_after_successful_copy(tmp_path, monkeypatch):
+    source = tmp_path / 'admintools.conf'
+    source.write_text('test')
+
+    logs: list[str] = []
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda cmd: '/usr/bin/docker' if cmd == 'docker' else None)
+    monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: False)
+
+    exec_calls: list[tuple[str, str, str]] = []
+
+    def fake_exec(container: str, target: str, content: str) -> bool:
+        exec_calls.append((container, target, content))
+        return True
+
+    monkeypatch.setattr(smoke, '_write_container_admintools_conf', fake_exec)
+
+    def fake_run(args, capture_output=True, text=True, **kwargs):
+        if args[:3] == ['docker', 'exec', '--user']:
+            if args[5:] == ['rm', '-f', '/opt/vertica/config/admintools.conf']:
+                return subprocess.CompletedProcess(args, 0, '', '')
+            if args[5:] == ['mkdir', '-p', '/opt/vertica/config']:
+                return subprocess.CompletedProcess(args, 0, '', '')
+        if args[:2] == ['docker', 'cp']:
+            return subprocess.CompletedProcess(args, 0, '', '')
+        raise AssertionError(args)
+
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    assert smoke._synchronize_container_admintools_conf('vertica_ce', source) is True
+    assert any('still missing inside container after docker cp' in entry for entry in logs)
+    assert exec_calls
 
 
 def test_synchronize_container_admintools_conf_missing_docker(tmp_path, monkeypatch):
