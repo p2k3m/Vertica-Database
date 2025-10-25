@@ -486,6 +486,76 @@ def _sanitize_vertica_data_directories() -> None:
                             continue
 
             config_exists = config_path.exists() and config_path.is_dir()
+            config_observed = config_path in _OBSERVED_VERTICA_CONFIG_DIRECTORIES
+            current_time = time.time()
+
+            if not config_exists:
+                if config_observed:
+                    if not _ensure_directory(config_path):
+                        continue
+                    _ensure_known_identity_tree(config_path, max_depth=2)
+                    config_exists = True
+                else:
+                    observed_at = _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.get(config_path)
+                    if observed_at is None:
+                        _ADMINTOOLS_CONF_MISSING_OBSERVED_AT[config_path] = current_time
+                        log(
+                            'Detected missing admintools.conf but Vertica '
+                            'configuration directory has not been observed yet; '
+                            'allowing the container to complete its initial '
+                            'bootstrap before seeding defaults'
+                        )
+                        continue
+
+                    missing_duration = current_time - observed_at
+                    container_status = _docker_inspect(
+                        'vertica_ce', '{{.State.Status}}'
+                    )
+                    container_health = _docker_inspect(
+                        'vertica_ce', '{{if .State.Health}}{{.State.Health.Status}}{{end}}'
+                    )
+                    status_display = container_status or '<absent>'
+                    health_display = container_health or '<unknown>'
+                    uptime = _container_uptime_seconds('vertica_ce')
+                    restart_count = _container_restart_count('vertica_ce')
+                    restart_display = 'unknown' if restart_count is None else str(restart_count)
+
+                    within_missing_grace = missing_duration < ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS
+                    uptime_within_grace = (
+                        uptime is None
+                        or uptime < ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS
+                    )
+                    restart_within_threshold = (
+                        restart_count is None
+                        or restart_count < ADMINTOOLS_CONF_MISSING_RESTART_THRESHOLD
+                    )
+
+                    if within_missing_grace and uptime_within_grace and restart_within_threshold:
+                        log(
+                            'Detected missing Vertica configuration directory '
+                            f'while container status is {status_display} with '
+                            f'health {health_display}; missing for '
+                            f'{missing_duration:.0f}s which remains within '
+                            'grace period so allowing bootstrap to continue '
+                            'before seeding defaults'
+                        )
+                        continue
+
+                    log(
+                        'Vertica configuration directory has not been '
+                        f'populated after {missing_duration:.0f}s with '
+                        f'status {status_display} and health {health_display}; '
+                        'creating directory and seeding defaults to assist '
+                        'recovery'
+                    )
+
+                    if not _ensure_directory(config_path):
+                        continue
+
+                    config_exists = True
+                    _OBSERVED_VERTICA_CONFIG_DIRECTORIES.add(config_path)
+                    _ensure_known_identity_tree(config_path, max_depth=2)
+
             if config_exists:
                 _OBSERVED_VERTICA_CONFIG_DIRECTORIES.add(config_path)
                 _ensure_directory(config_path)
