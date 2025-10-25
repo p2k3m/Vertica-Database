@@ -204,6 +204,7 @@ def test_sanitize_retains_missing_observation_until_container_confirms(monkeypat
     vertica_root = tmp_path / 'vertica'
     config_path = vertica_root / 'config'
     config_path.mkdir(parents=True)
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.add(config_path)
 
     monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [tmp_path])
     monkeypatch.setattr(smoke, '_candidate_vertica_roots', lambda base: [vertica_root])
@@ -229,6 +230,7 @@ def test_sanitize_retains_missing_observation_until_container_confirms(monkeypat
     finally:
         smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
         smoke._ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
+        smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.discard(config_path)
 
 
 def test_sanitize_clears_missing_observation_when_container_has_config(monkeypatch, tmp_path):
@@ -236,6 +238,7 @@ def test_sanitize_clears_missing_observation_when_container_has_config(monkeypat
     vertica_root = tmp_path / 'vertica'
     config_path = vertica_root / 'config'
     config_path.mkdir(parents=True)
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.add(config_path)
 
     monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [tmp_path])
     monkeypatch.setattr(smoke, '_candidate_vertica_roots', lambda base: [vertica_root])
@@ -269,6 +272,7 @@ def test_sanitize_clears_missing_observation_when_container_has_config(monkeypat
     finally:
         smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
         smoke._ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
+        smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.discard(config_path)
 
 
 def test_candidate_vertica_roots_includes_base_when_config_missing(tmp_path):
@@ -362,6 +366,9 @@ def test_sanitize_seeds_admintools_conf_after_restarts(tmp_path, monkeypatch):
 
     monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
     monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda *args, **kwargs: False)
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.update(
+        {base / 'config', vertica_root / 'config', base / smoke.DB_NAME / 'config'}
+    )
 
     smoke._sanitize_vertica_data_directories()
 
@@ -373,6 +380,7 @@ def test_sanitize_seeds_admintools_conf_after_restarts(tmp_path, monkeypatch):
     }
     assert set(seed_calls).issubset(expected_targets)
     assert any('restart count' in entry for entry in logs)
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.clear()
 
 
 def test_sanitize_seeds_admintools_conf_after_missing_duration(tmp_path, monkeypatch):
@@ -421,6 +429,9 @@ def test_sanitize_seeds_admintools_conf_after_missing_duration(tmp_path, monkeyp
     monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda *args, **kwargs: False)
     smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
     smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.update(
+        {base / 'config', vertica_root / 'config', base / smoke.DB_NAME / 'config'}
+    )
 
     smoke._sanitize_vertica_data_directories()
     assert not seed_calls
@@ -433,6 +444,7 @@ def test_sanitize_seeds_admintools_conf_after_missing_duration(tmp_path, monkeyp
     assert any('missing for' in entry for entry in logs)
     smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
     smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.clear()
 
 
 def test_sanitize_rebuilds_config_after_seed_timeout(tmp_path, monkeypatch):
@@ -497,6 +509,9 @@ def test_sanitize_rebuilds_config_after_seed_timeout(tmp_path, monkeypatch):
 
     smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
     smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.update(
+        {vertica_root / 'config', base / 'config', base / smoke.DB_NAME / 'config'}
+    )
 
     smoke._sanitize_vertica_data_directories()
 
@@ -512,6 +527,60 @@ def test_sanitize_rebuilds_config_after_seed_timeout(tmp_path, monkeypatch):
 
     smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
     smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
+
+
+def test_sanitize_defers_seeding_until_config_observed(tmp_path, monkeypatch):
+    base = tmp_path / 'data'
+    base.mkdir()
+
+    logs: list[str] = []
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base])
+    monkeypatch.setattr(smoke, '_ensure_known_identity_tree', lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, '_ensure_known_identity', lambda path: None)
+    monkeypatch.setattr(smoke, '_ensure_vertica_admin_identity', lambda path: None)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 600.0)
+    monkeypatch.setattr(smoke, '_container_restart_count', lambda container: 0)
+
+    def fake_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return 'unhealthy'
+        raise AssertionError(template)
+
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_inspect)
+
+    seed_calls: list[Path] = []
+
+    def fake_seed(path: Path) -> tuple[bool, bool]:
+        seed_calls.append(path)
+        return True, True
+
+    monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
+    monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda *args, **kwargs: False)
+    smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
+    smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.clear()
+
+    smoke._sanitize_vertica_data_directories()
+    assert not seed_calls
+
+    current_time['value'] = smoke.ADMINTOOLS_CONF_MISSING_GRACE_PERIOD_SECONDS + 600.0
+    smoke._sanitize_vertica_data_directories()
+
+    assert not seed_calls
+    assert any('configuration directory has not been observed yet' in entry for entry in logs)
+    smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
+    smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.clear()
 
 
 def test_seed_default_admintools_conf(tmp_path, monkeypatch):

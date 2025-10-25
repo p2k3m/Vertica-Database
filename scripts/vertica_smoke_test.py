@@ -140,7 +140,15 @@ _ADMINTOOLS_CONF_MISSING_OBSERVED_AT: dict[Path, float] = {}
 # data directory.  When the file remains missing inside the container long after
 # seeding completes the most reliable recovery option is to rebuild the data
 # directory from scratch so the Vertica bootstrap logic can repopulate it.
+# Track Vertica configuration directories that have existed on disk.  The
+# smoke test only seeds ``admintools.conf`` after the container has populated
+# ``config/`` at least once; creating the directory prematurely interferes with
+# Vertica's first-run bootstrap copy and leaves ``admintools.conf`` missing
+# inside the container.  Remember which directories have been observed so we can
+# distinguish a fresh bootstrap (where we must wait for Vertica to copy the
+# defaults) from a corrupted installation that genuinely needs recovery.
 _ADMINTOOLS_CONF_SEEDED_AT: dict[Path, float] = {}
+_OBSERVED_VERTICA_CONFIG_DIRECTORIES: set[Path] = set()
 
 
 def _is_within_vertica_data_directories(candidate: Path) -> bool:
@@ -479,6 +487,7 @@ def _sanitize_vertica_data_directories() -> None:
 
             config_exists = config_path.exists() and config_path.is_dir()
             if config_exists:
+                _OBSERVED_VERTICA_CONFIG_DIRECTORIES.add(config_path)
                 _ensure_directory(config_path)
                 _ensure_known_identity_tree(config_path, max_depth=2)
 
@@ -487,6 +496,17 @@ def _sanitize_vertica_data_directories() -> None:
                 _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
                 _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
             else:
+                config_observed = config_path in _OBSERVED_VERTICA_CONFIG_DIRECTORIES
+                if not config_observed:
+                    _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+                    _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
+                    log(
+                        'Detected missing admintools.conf but Vertica ' 
+                        'configuration directory has not been observed yet; '
+                        'allowing the container to complete its initial '
+                        'bootstrap before seeding defaults'
+                    )
+                    continue
                 container_status = _docker_inspect(
                     'vertica_ce', '{{.State.Status}}'
                 )
@@ -589,6 +609,7 @@ def _sanitize_vertica_data_directories() -> None:
                             or config_path not in _ADMINTOOLS_CONF_SEEDED_AT
                         ):
                             _ADMINTOOLS_CONF_SEEDED_AT[config_path] = time.time()
+                        _OBSERVED_VERTICA_CONFIG_DIRECTORIES.add(config_path)
                         _ensure_known_identity_tree(config_path, max_depth=2)
                         synchronized = _synchronize_container_admintools_conf(
                             'vertica_ce', admintools_conf
@@ -732,6 +753,7 @@ def _sanitize_vertica_data_directories() -> None:
                         _ensure_directory(base_path)
                     _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
                     _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
+                    _OBSERVED_VERTICA_CONFIG_DIRECTORIES.discard(config_path)
                 continue
 
             if config_path.exists() or config_path.is_symlink():
