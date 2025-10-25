@@ -192,6 +192,26 @@ fi
 
 chmod 777 /var/lib/vertica
 
+# Vertica container versions prior to this project occasionally left a
+# symlinked ``config`` directory inside the persistent data path that pointed
+# back to ``/opt/vertica/config``.  When present, newer images interpret the
+# symlink as the bootstrap destination which causes the initial copy to abort
+# with ``cp: '/opt/vertica/config' and '/data/vertica/config' are the same
+# file``.  Remove the stale symlink so Vertica can repopulate the configuration
+# directory from scratch during startup.
+for base_path in /var/lib/vertica /data/vertica; do
+  config_path="$base_path/config"
+  if [ -L "$config_path" ]; then
+    target="$(readlink "$config_path" 2>/dev/null || true)"
+    case "$target" in
+      /opt/vertica/config|opt/vertica/config)
+        echo "[user-data] Removing stale Vertica config symlink at $config_path -> $target"
+        rm -f "$config_path"
+        ;;
+    esac
+  fi
+done
+
 # Ensure the Vertica image is available locally before starting the service
 if ! docker pull "$VERTICA_IMAGE"; then
   echo "Failed to pull Vertica image $VERTICA_IMAGE" >&2
