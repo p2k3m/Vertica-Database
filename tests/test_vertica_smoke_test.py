@@ -708,6 +708,25 @@ def test_seed_default_admintools_conf_rebuilds_invalid_file(tmp_path, monkeypatc
     assert any('attempting to rebuild it with safe defaults' in entry for entry in logs)
 
 
+def test_seed_default_admintools_conf_removes_symlink(tmp_path, monkeypatch):
+    logs: list[str] = []
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+
+    config_dir = tmp_path / 'config'
+    config_dir.mkdir()
+    existing = config_dir / 'admintools.conf'
+    existing.symlink_to(existing)
+
+    success, changed = smoke._seed_default_admintools_conf(config_dir)
+
+    assert success is True
+    assert changed is True
+    assert existing.exists()
+    assert not existing.is_symlink()
+    assert any('Removing symlinked admintools.conf' in entry for entry in logs)
+
+
 def test_synchronize_container_admintools_conf_success(tmp_path, monkeypatch):
     source = tmp_path / 'admintools.conf'
     source.write_text('test')
