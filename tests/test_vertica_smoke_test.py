@@ -1136,15 +1136,15 @@ def test_pull_image_failure_is_non_fatal(monkeypatch):
 def test_compose_up_removes_stale_vertica_container(monkeypatch):
     compose_path = Path('/opt/compose.remote.yml')
     run_calls: list[list[str]] = []
-    removal_calls: list[int] = []
+    removal_calls: list[bool] = []
 
     def fake_run_command(command: list[str]):
         run_calls.append(command)
         if len(run_calls) == 1:
-            raise SystemExit('initial failure')
+            raise smoke.CommandError(command, 1, '', '')
 
-    def fake_remove() -> bool:
-        removal_calls.append(1)
+    def fake_remove(*, force: bool = False) -> bool:
+        removal_calls.append(force)
         return True
 
     monkeypatch.setattr(smoke, '_docker_compose_plugin_available', lambda: True)
@@ -1156,20 +1156,20 @@ def test_compose_up_removes_stale_vertica_container(monkeypatch):
     smoke._compose_up(compose_path)
 
     assert len(run_calls) == 2
-    assert len(removal_calls) == 1
+    assert removal_calls == [False]
 
 
 def test_compose_up_raises_when_stale_container_removal_fails(monkeypatch):
     compose_path = Path('/opt/compose.remote.yml')
     run_calls: list[list[str]] = []
-    removal_calls: list[int] = []
+    removal_calls: list[bool] = []
 
     def fake_run_command(command: list[str]):
         run_calls.append(command)
-        raise SystemExit('persistent failure')
+        raise smoke.CommandError(command, 1, '', '')
 
-    def fake_remove() -> bool:
-        removal_calls.append(1)
+    def fake_remove(*, force: bool = False) -> bool:
+        removal_calls.append(force)
         return False
 
     monkeypatch.setattr(smoke, '_docker_compose_plugin_available', lambda: True)
@@ -1182,7 +1182,40 @@ def test_compose_up_raises_when_stale_container_removal_fails(monkeypatch):
         smoke._compose_up(compose_path)
 
     assert len(run_calls) == 1
-    assert len(removal_calls) == 1
+    assert removal_calls == [False]
+
+
+def test_compose_up_forces_container_removal_on_conflict(monkeypatch):
+    compose_path = Path('/opt/compose.remote.yml')
+    run_calls: list[list[str]] = []
+    removal_calls: list[bool] = []
+
+    def fake_run_command(command: list[str]):
+        run_calls.append(command)
+        if len(run_calls) == 1:
+            raise smoke.CommandError(
+                command,
+                1,
+                '',
+                'Error response from daemon: Conflict. '
+                'The container name "/vertica_ce" is already in use by container "abc123".',
+            )
+        return subprocess.CompletedProcess(command, 0, '', '')
+
+    def fake_remove(*, force: bool = False) -> bool:
+        removal_calls.append(force)
+        return force
+
+    monkeypatch.setattr(smoke, '_docker_compose_plugin_available', lambda: True)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda name: None)
+    monkeypatch.setattr(smoke, 'run_command', fake_run_command)
+    monkeypatch.setattr(smoke, '_remove_stale_vertica_container', fake_remove)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+
+    smoke._compose_up(compose_path)
+
+    assert len(run_calls) == 2
+    assert removal_calls == [False, True]
 
 
 def test_ensure_primary_admin_user_creates_user(monkeypatch):
