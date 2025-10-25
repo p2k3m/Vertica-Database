@@ -226,6 +226,37 @@ for base_path in /var/lib/vertica /data/vertica; do
       rm -rf "$config_path"
     fi
   fi
+
+  admintools_conf="$config_path/admintools.conf"
+  if [ -L "$admintools_conf" ]; then
+    target="$(readlink "$admintools_conf" 2>/dev/null || true)"
+    resolved="$(readlink -f "$admintools_conf" 2>/dev/null || true)"
+
+    remove_symlink=false
+    if [ -n "$target" ]; then
+      case "$target" in
+        /opt/vertica/config/*|opt/vertica/config/*|../opt/vertica/config/*|*/../opt/vertica/config/*)
+          remove_symlink=true
+          ;;
+      esac
+      if [ "$remove_symlink" != true ] && [[ "$target" == *"opt/vertica/config/admintools.conf"* ]]; then
+        remove_symlink=true
+      fi
+    fi
+
+    if [ "$resolved" = "/opt/vertica/config/admintools.conf" ]; then
+      remove_symlink=true
+    fi
+
+    if [ "$remove_symlink" = true ]; then
+      if [ -n "$target" ]; then
+        echo "[user-data] Removing symlinked admintools.conf at $admintools_conf -> $target"
+      else
+        echo "[user-data] Removing symlinked admintools.conf at $admintools_conf"
+      fi
+      rm -f "$admintools_conf"
+    fi
+  fi
 done
 
 # Ensure the Vertica image is available locally before starting the service
