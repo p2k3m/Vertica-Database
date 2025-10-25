@@ -1,4 +1,5 @@
 import configparser
+import errno
 import grp
 import json
 import os
@@ -864,7 +865,67 @@ def _seed_default_admintools_conf(config_dir: Path) -> tuple[bool, bool]:
 
     admintools_conf = config_dir / 'admintools.conf'
     needs_rebuild = False
-    if admintools_conf.exists():
+
+    try:
+        is_symlink = admintools_conf.is_symlink()
+    except OSError as exc:
+        if exc.errno not in (errno.ENOENT, errno.EINVAL):
+            log(
+                'Unable to inspect admintools.conf while checking for symlinks '
+                f'({admintools_conf}): {exc}'
+            )
+            return False, False
+        is_symlink = False
+
+    if is_symlink:
+        try:
+            target = os.readlink(admintools_conf)
+        except OSError:
+            target = None
+        if target is None:
+            log(
+                'Removing symlinked admintools.conf at '
+                f'{admintools_conf} to rebuild a regular file'
+            )
+        else:
+            log(
+                'Removing symlinked admintools.conf at '
+                f'{admintools_conf} -> {target} to rebuild a regular file'
+            )
+        try:
+            admintools_conf.unlink()
+        except OSError as exc:
+            log(
+                'Unable to remove symlinked admintools.conf '
+                f'{admintools_conf}: {exc}'
+            )
+            return False, False
+
+    try:
+        exists = admintools_conf.exists()
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            log(
+                'Encountered recursive symlink at admintools.conf '
+                f'({admintools_conf}); rebuilding with safe defaults'
+            )
+            try:
+                admintools_conf.unlink()
+            except OSError as unlink_exc:
+                log(
+                    'Unable to remove recursive admintools.conf symlink '
+                    f'{admintools_conf}: {unlink_exc}'
+                )
+                return False, False
+            exists = False
+        else:
+            log(
+                'Unable to determine whether admintools.conf exists '
+                f'({admintools_conf}): {exc}'
+            )
+            return False, False
+
+    if exists:
         if _admintools_conf_needs_rebuild(admintools_conf):
             log(
                 'Existing admintools.conf is missing critical configuration; '
