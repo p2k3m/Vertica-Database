@@ -1482,6 +1482,36 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
                 container_parent = os.path.dirname(container_target) or '/'
 
                 try:
+                    remove_result = subprocess.run(
+                        [
+                            'docker',
+                            'exec',
+                            '--user',
+                            '0',
+                            container,
+                            'rm',
+                            '-f',
+                            container_target,
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                except FileNotFoundError:
+                    log('Docker CLI is not available while removing admintools.conf inside container before synchronization')
+                    return False
+
+                if remove_result.stdout:
+                    log(remove_result.stdout.rstrip())
+                if remove_result.stderr:
+                    log(f'[stderr] {remove_result.stderr.rstrip()}')
+
+                if remove_result.returncode != 0:
+                    log(
+                        'Failed to remove existing admintools.conf inside container prior to synchronization; '
+                        'attempting to continue'
+                    )
+
+                try:
                     mkdir_result = subprocess.run(
                         [
                             'docker',
