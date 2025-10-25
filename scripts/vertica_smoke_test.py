@@ -1578,19 +1578,20 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
                 )
 
                 exists_after_copy = _container_path_exists(container, container_target)
-                if exists_after_copy is False:
-                    log(
-                        'admintools.conf still missing inside container after docker cp; '
-                        'attempting exec fallback'
-                    )
+                if exists_after_copy is False or exists_after_copy is None:
+                    if exists_after_copy is False:
+                        log(
+                            'admintools.conf still missing inside container after docker cp; '
+                            'attempting exec fallback'
+                        )
+                    else:
+                        log(
+                            'Unable to verify admintools.conf inside container after docker cp; '
+                            'attempting exec fallback'
+                        )
                     if not _write_container_admintools_conf(container, container_target, content):
                         overall_success = False
                     continue
-                if exists_after_copy is None:
-                    log(
-                        'Unable to verify admintools.conf inside container after docker cp; '
-                        'continuing without exec fallback'
-                    )
     except OSError as exc:
         log(f'Unable to stage admintools.conf for container synchronization: {exc}')
         return False
