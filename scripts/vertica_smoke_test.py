@@ -1653,6 +1653,27 @@ def _reset_vertica_data_directories() -> bool:
             else:
                 removed_any = True
 
+        config_path = base_path / 'config'
+        try:
+            config_exists = config_path.exists() or config_path.is_symlink()
+        except OSError as exc:
+            log(f'Unable to inspect Vertica config path {config_path}: {exc}')
+            config_exists = False
+
+        if config_exists:
+            log(f'Removing Vertica configuration directory at {config_path}')
+            try:
+                if config_path.is_symlink() or config_path.is_file():
+                    config_path.unlink()
+                else:
+                    shutil.rmtree(config_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                log(f'Unable to remove {config_path}: {exc}')
+            else:
+                removed_any = True
+
     return removed_any
 
 

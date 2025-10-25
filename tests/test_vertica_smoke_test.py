@@ -998,6 +998,36 @@ def test_reset_vertica_data_directories_handles_multiple_mount_points(tmp_path, 
     assert not (data / 'vertica').exists()
 
 
+def test_reset_vertica_data_directories_removes_config_directories(tmp_path, monkeypatch):
+    base = tmp_path / 'vertica_data'
+    config_dir = base / 'config'
+    config_dir.mkdir(parents=True)
+    (config_dir / 'admintools.conf').write_text('test')
+
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base], raising=False)
+
+    removed = smoke._reset_vertica_data_directories()
+
+    assert removed is True
+    assert not config_dir.exists()
+
+
+def test_reset_vertica_data_directories_removes_config_symlinks(tmp_path, monkeypatch):
+    base = tmp_path / 'vertica_data'
+    target = tmp_path / 'shared_config'
+    target.mkdir(parents=True)
+    (target / 'admintools.conf').write_text('test')
+    base.mkdir(parents=True)
+    (base / 'config').symlink_to(target)
+
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base], raising=False)
+
+    removed = smoke._reset_vertica_data_directories()
+
+    assert removed is True
+    assert not (base / 'config').exists()
+
+
 def test_connect_and_query_prefers_tls(monkeypatch):
     captured_config: dict[str, object] = {}
 
