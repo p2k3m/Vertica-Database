@@ -203,12 +203,28 @@ for base_path in /var/lib/vertica /data/vertica; do
   config_path="$base_path/config"
   if [ -L "$config_path" ]; then
     target="$(readlink "$config_path" 2>/dev/null || true)"
+    resolved="$(readlink -f "$config_path" 2>/dev/null || true)"
     case "$target" in
       /opt/vertica/config|opt/vertica/config)
         echo "[user-data] Removing stale Vertica config symlink at $config_path -> $target"
         rm -f "$config_path"
+        continue
         ;;
     esac
+
+    if [ "$resolved" = "/opt/vertica/config" ]; then
+      echo "[user-data] Removing stale Vertica config symlink at $config_path -> $target (resolved $resolved)"
+      rm -f "$config_path"
+      continue
+    fi
+  fi
+
+  if [ -d "$config_path" ]; then
+    resolved="$(readlink -f "$config_path" 2>/dev/null || true)"
+    if [ "$resolved" = "/opt/vertica/config" ]; then
+      echo "[user-data] Removing Vertica config directory at $config_path that resolves to $resolved"
+      rm -rf "$config_path"
+    fi
   fi
 done
 
