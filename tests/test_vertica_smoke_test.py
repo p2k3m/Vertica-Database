@@ -1266,7 +1266,7 @@ def test_vertica_admin_identity_candidates_uses_container_identity(monkeypatch):
 
     candidates = smoke._vertica_admin_identity_candidates()
 
-    assert candidates == [(1000, 1001)]
+    assert candidates[0] == (1000, 1001)
 
 
 def test_vertica_admin_identity_candidates_includes_known_fallback(monkeypatch):
@@ -1285,6 +1285,25 @@ def test_vertica_admin_identity_candidates_includes_known_fallback(monkeypatch):
 
     monkeypatch.setattr(smoke.pwd, 'getpwnam', missing_user)
     monkeypatch.setattr(smoke.pwd, 'getpwuid', fake_getpwuid)
+    monkeypatch.setattr(smoke, '_container_dbadmin_identity', lambda container: None)
+
+    candidates = smoke._vertica_admin_identity_candidates()
+
+    assert (
+        smoke.VERTICA_ADMIN_FALLBACK_UID,
+        smoke.VERTICA_ADMIN_FALLBACK_GID,
+    ) in candidates
+
+
+def test_vertica_admin_identity_candidates_includes_numeric_fallback(monkeypatch):
+    def missing_user(name: str):
+        raise KeyError(name)
+
+    def missing_uid(uid: int):
+        raise KeyError(uid)
+
+    monkeypatch.setattr(smoke.pwd, 'getpwnam', missing_user)
+    monkeypatch.setattr(smoke.pwd, 'getpwuid', missing_uid)
     monkeypatch.setattr(smoke, '_container_dbadmin_identity', lambda container: None)
 
     candidates = smoke._vertica_admin_identity_candidates()
