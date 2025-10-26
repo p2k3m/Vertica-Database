@@ -147,6 +147,12 @@ _VERTICA_CONTAINER_DATA_DIRECTORY_MAPPINGS: dict[Path, tuple[str, ...]] = {
     Path('/data/vertica'): ('/data/vertica',),
 }
 ADMINTOOLS_CONF_SEED_RECOVERY_SECONDS = 300.0
+_CONFIG_COPY_SAME_FILE_PATTERNS: tuple[str, ...] = (
+    "cp: '/opt/vertica/config' and '/data/vertica/config' are the same file",
+    "cp: '/opt/vertica/config' and '/var/lib/vertica/config' are the same file",
+)
+_CONFIG_COPY_SAME_FILE_LOG_CACHE: dict[str, tuple[float, bool]] = {}
+_CONFIG_COPY_SAME_FILE_LOG_TTL_SECONDS = 30.0
 
 # Track when ``admintools.conf`` was first observed missing for each Vertica
 # data directory.  Some bootstrap failures repeatedly start the container and
@@ -171,6 +177,7 @@ _ADMINTOOLS_CONF_SEEDED_AT: dict[Path, float] = {}
 _VERTICA_CONTAINER_RESTART_THROTTLE_SECONDS = 60.0
 _LAST_VERTICA_CONTAINER_RESTART: Optional[float] = None
 _OBSERVED_VERTICA_CONFIG_DIRECTORIES: set[Path] = set()
+_VERTICA_CONFIG_SAME_FILE_RECOVERED: set[Path] = set()
 
 
 def _is_within_vertica_data_directories(candidate: Path) -> bool:
@@ -430,6 +437,8 @@ def _sanitize_vertica_data_directories() -> None:
     log(STEP_SEPARATOR)
     log('Ensuring Vertica data directories are accessible to the container')
 
+    same_file_issue_detected = _container_reports_config_same_file_issue('vertica_ce')
+
     for base_path in VERTICA_DATA_DIRECTORIES:
         if not _ensure_directory(base_path):
             continue
@@ -471,6 +480,31 @@ def _sanitize_vertica_data_directories() -> None:
                 continue
 
             config_path = vertica_root / 'config'
+
+            if same_file_issue_detected and config_path not in _VERTICA_CONFIG_SAME_FILE_RECOVERED:
+                if config_path.exists() or config_path.is_symlink():
+                    log(
+                        'Detected identical Vertica configuration source and '
+                        f'destination paths; rebuilding persisted configuration at {config_path}'
+                    )
+                    try:
+                        shutil.rmtree(config_path)
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        log(f'Unable to remove {config_path}: {exc}')
+                    else:
+                        _VERTICA_CONFIG_SAME_FILE_RECOVERED.add(config_path)
+                        _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+                        _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
+                        _OBSERVED_VERTICA_CONFIG_DIRECTORIES.discard(config_path)
+                        if not _ensure_directory(vertica_root):
+                            continue
+                        _restart_vertica_container(
+                            'vertica_ce', 'recover configuration copy failure'
+                        )
+                        continue
+
             if config_path.is_symlink():
                 try:
                     target = os.readlink(config_path)
@@ -1940,6 +1974,40 @@ def _docker_inspect(container: str, template: str) -> Optional[str]:
     if value == '<no value>':
         return None
     return value or None
+
+
+def _container_reports_config_same_file_issue(container: str) -> bool:
+    """Return ``True`` when container logs report identical config paths."""
+
+    now = time.time()
+    cached = _CONFIG_COPY_SAME_FILE_LOG_CACHE.get(container)
+    if cached and now - cached[0] < _CONFIG_COPY_SAME_FILE_LOG_TTL_SECONDS:
+        return cached[1]
+
+    detected = False
+
+    if shutil.which('docker') is not None:
+        try:
+            result = subprocess.run(
+                ['docker', 'logs', '--tail', '200', container],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            detected = False
+        else:
+            output_parts = []
+            if result.stdout:
+                output_parts.append(result.stdout)
+            if result.stderr:
+                output_parts.append(result.stderr)
+            if output_parts:
+                combined = '\n'.join(part.rstrip() for part in output_parts)
+                detected = any(
+                    pattern in combined for pattern in _CONFIG_COPY_SAME_FILE_PATTERNS
+                )
+    _CONFIG_COPY_SAME_FILE_LOG_CACHE[container] = (now, detected)
+    return detected
 
 
 def _docker_health_log(container: str) -> list[dict[str, object]]:

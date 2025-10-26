@@ -20,6 +20,12 @@ def _disable_container_restart(monkeypatch):
     monkeypatch.setattr(smoke, '_restart_vertica_container', lambda *args, **kwargs: False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_same_file_state(monkeypatch):
+    monkeypatch.setattr(smoke, '_CONFIG_COPY_SAME_FILE_LOG_CACHE', {})
+    monkeypatch.setattr(smoke, '_VERTICA_CONFIG_SAME_FILE_RECOVERED', set())
+
+
 def _set_fixed_now(monkeypatch, moment: datetime) -> None:
     original_datetime = smoke.datetime
 
@@ -396,6 +402,55 @@ def test_sanitize_removes_relative_opt_config_symlink(tmp_path, monkeypatch):
     assert not config_path.is_symlink()
     assert any('Removing confusing symlink' in entry for entry in logs)
     assert base_path in ensure_calls
+
+
+def test_sanitize_rebuilds_config_after_same_file_logs(monkeypatch, tmp_path):
+    base_path = tmp_path / 'vertica'
+    base_path.mkdir()
+    config_path = base_path / 'config'
+    config_path.mkdir()
+    (config_path / 'placeholder').write_text('test')
+
+    logs: list[str] = []
+    restart_requests: list[tuple[str, str]] = []
+
+    def fake_restart(container: str, reason: str) -> bool:
+        restart_requests.append((container, reason))
+        return True
+
+    def fake_candidate_roots(base: Path) -> list[Path]:
+        assert base == base_path
+        return [base]
+
+    def fake_ensure_directory(path: Path) -> bool:
+        path.mkdir(parents=True, exist_ok=True)
+        return True
+
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base_path], raising=False)
+    monkeypatch.setattr(smoke, '_candidate_vertica_roots', fake_candidate_roots)
+    monkeypatch.setattr(smoke, '_ensure_directory', fake_ensure_directory)
+    monkeypatch.setattr(smoke, '_ensure_known_identity_tree', lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, '_align_identity_with_parent', lambda path: None)
+    monkeypatch.setattr(smoke, '_ensure_known_identity', lambda path: None)
+    monkeypatch.setattr(smoke, '_docker_inspect', lambda container, template: 'running')
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 1000.0)
+    monkeypatch.setattr(smoke, '_container_restart_count', lambda container: 0)
+    monkeypatch.setattr(smoke, '_seed_default_admintools_conf', lambda config_dir: (True, False))
+    monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda container, source: False)
+    monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: False)
+    monkeypatch.setattr(smoke, '_container_reports_config_same_file_issue', lambda container: True)
+    monkeypatch.setattr(smoke, '_restart_vertica_container', fake_restart, raising=False)
+    monkeypatch.setattr(smoke, 'log', lambda message: logs.append(message))
+
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.add(config_path)
+
+    smoke._sanitize_vertica_data_directories()
+
+    assert not config_path.exists()
+    assert base_path.exists()
+    assert smoke._VERTICA_CONFIG_SAME_FILE_RECOVERED == {config_path}
+    assert restart_requests == [('vertica_ce', 'recover configuration copy failure')]
+    assert any('identical Vertica configuration source' in entry for entry in logs)
 
 
 def test_ensure_vertica_rechecks_sanitize_during_unhealthy(monkeypatch):
