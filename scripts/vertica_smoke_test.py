@@ -948,6 +948,31 @@ def _image_default_admintools_conf() -> Optional[str]:
     if shutil.which('docker') is None:
         return None
 
+    search_paths = [
+        '/opt/vertica/config/admintools.conf',
+        '/opt/vertica/config/admintools/admintools.conf',
+        '/opt/vertica/share/admintools/admintools.conf',
+        '/opt/vertica/share/admintools.conf',
+        '/opt/vertica/share/config/admintools.conf',
+    ]
+
+    search_script_lines = [
+        'for path in "$@"; do',
+        '  if [ -f "$path" ]; then',
+        '    cat "$path"',
+        '    exit 0',
+        '  fi',
+        'done',
+        'if command -v find >/dev/null 2>&1; then',
+        "  candidate=$(find /opt/vertica -maxdepth 6 -type f -name admintools.conf 2>/dev/null | head -n 1)",
+        '  if [ -n "$candidate" ]; then',
+        '    cat "$candidate"',
+        '    exit 0',
+        '  fi',
+        'fi',
+        'exit 1',
+    ]
+
     try:
         result = subprocess.run(
             [
@@ -955,9 +980,12 @@ def _image_default_admintools_conf() -> Optional[str]:
                 'run',
                 '--rm',
                 '--entrypoint',
-                '/bin/cat',
+                '/bin/sh',
                 image_name,
-                '/opt/vertica/config/admintools.conf',
+                '-c',
+                '\n'.join(search_script_lines),
+                '--',
+                *search_paths,
             ],
             capture_output=True,
             text=True,
