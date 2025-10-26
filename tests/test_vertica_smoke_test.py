@@ -356,6 +356,43 @@ def test_candidate_vertica_roots_includes_base_when_config_missing(tmp_path):
     assert base_path in candidates
 
 
+def test_sanitize_removes_relative_opt_config_symlink(tmp_path, monkeypatch):
+    base_path = tmp_path / 'vertica_data'
+    base_path.mkdir()
+    config_path = base_path / 'config'
+    config_path.symlink_to(Path('../opt/vertica/config'))
+
+    ensure_calls: list[Path] = []
+    logs: list[str] = []
+
+    def fake_candidate_roots(base: Path) -> list[Path]:
+        return [base]
+
+    def fake_ensure_directory(path: Path) -> bool:
+        ensure_calls.append(path)
+        if path == config_path:
+            path.mkdir(parents=True, exist_ok=True)
+        return True
+
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base_path], raising=False)
+    monkeypatch.setattr(smoke, '_candidate_vertica_roots', fake_candidate_roots)
+    monkeypatch.setattr(smoke, '_ensure_directory', fake_ensure_directory)
+    monkeypatch.setattr(smoke, '_ensure_known_identity_tree', lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, '_docker_inspect', lambda container, template: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 0.0)
+    monkeypatch.setattr(smoke, '_container_restart_count', lambda container: 0)
+    monkeypatch.setattr(smoke, '_seed_default_admintools_conf', lambda config_dir: (True, False))
+    monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda container, source: True)
+    monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: True)
+    monkeypatch.setattr(smoke, 'log', lambda message: logs.append(message))
+
+    smoke._sanitize_vertica_data_directories()
+
+    assert not config_path.is_symlink()
+    assert any('Removing confusing symlink' in entry for entry in logs)
+    assert base_path in ensure_calls
+
+
 def test_ensure_vertica_rechecks_sanitize_during_unhealthy(monkeypatch):
     current_time = {'value': 0.0}
 
