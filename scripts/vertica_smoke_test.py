@@ -297,7 +297,7 @@ def _discover_existing_vertica_admin_identities(
             visited.add(current)
 
             try:
-                stat_info = current.stat(follow_symlinks=False)
+                stat_info = os.stat(current, follow_symlinks=False)
             except OSError:
                 continue
 
@@ -320,7 +320,7 @@ def _discover_existing_vertica_admin_identities(
                     for entry in entries:
                         child_path = Path(entry.path)
                         try:
-                            child_stat = entry.stat(follow_symlinks=False)
+                            child_stat = os.stat(entry.path, follow_symlinks=False)
                         except OSError:
                             continue
 
@@ -330,6 +330,8 @@ def _discover_existing_vertica_admin_identities(
                         if depth + 1 <= max_depth:
                             try:
                                 is_child_dir = entry.is_dir(follow_symlinks=False)
+                            except TypeError:
+                                is_child_dir = entry.is_dir()
                             except OSError:
                                 continue
 
@@ -1370,6 +1372,8 @@ def _ensure_known_identity_tree(path: Path, *, max_depth: int = 2) -> None:
 
                     try:
                         is_dir = entry.is_dir(follow_symlinks=False)
+                    except TypeError:
+                        is_dir = entry.is_dir()
                     except OSError as exc:
                         log(f'Unable to inspect {child_path}: {exc}')
                         continue
