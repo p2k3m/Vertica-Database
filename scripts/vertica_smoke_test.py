@@ -314,6 +314,11 @@ def _ensure_vertica_admin_identity(path: Path) -> None:
             )
             return
 
+# ``DEFAULT_ADMINTOOLS_CONF`` acts as a fallback when the Vertica image is not
+# available or ``docker`` cannot be invoked.  When possible the smoke test loads
+# the template directly from the container image so that future Vertica
+# releases, which may ship updated defaults, continue to work without requiring
+# code changes.
 DEFAULT_ADMINTOOLS_CONF = textwrap.dedent(
     """
     [Configuration]
@@ -354,6 +359,8 @@ DEFAULT_ADMINTOOLS_CONF = textwrap.dedent(
         awsregion = null
     """
 ).strip() + "\n"
+
+_DEFAULT_ADMINTOOLS_CONF_CACHE: Optional[str] = None
 
 
 def _candidate_vertica_roots(base_path: Path) -> list[Path]:
@@ -901,6 +908,103 @@ def _sanitize_vertica_data_directories() -> None:
                 _seed_default_admintools_conf(config_path)
 
 
+def _resolve_vertica_image_name() -> Optional[str]:
+    """Return the Vertica container image name when available."""
+
+    if shutil.which('docker') is None:
+        return None
+
+    try:
+        inspect_result = subprocess.run(
+            ['docker', 'inspect', '--format', '{{.Config.Image}}', 'vertica_ce'],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while resolving Vertica image name')
+        inspect_result = None
+    else:
+        if inspect_result.returncode == 0:
+            value = inspect_result.stdout.strip()
+            if value:
+                return value
+
+    compose_file = _compose_file()
+    if compose_file is not None:
+        image_name = _extract_compose_image(compose_file)
+        if image_name:
+            return image_name
+
+    return None
+
+
+def _image_default_admintools_conf() -> Optional[str]:
+    """Attempt to read ``admintools.conf`` from the Vertica container image."""
+
+    image_name = _resolve_vertica_image_name()
+    if not image_name:
+        return None
+
+    if shutil.which('docker') is None:
+        return None
+
+    try:
+        result = subprocess.run(
+            [
+                'docker',
+                'run',
+                '--rm',
+                '--entrypoint',
+                '/bin/cat',
+                image_name,
+                '/opt/vertica/config/admintools.conf',
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is not available while extracting admintools.conf template from image')
+        return None
+
+    if result.returncode != 0:
+        if result.stderr:
+            log(f'[stderr] {result.stderr.rstrip()}')
+        log(
+            'Failed to extract admintools.conf template from Vertica image '
+            f'{image_name}: exit code {result.returncode}'
+        )
+        return None
+
+    content = result.stdout
+    if not content:
+        log(
+            'Vertica image {image} returned an empty admintools.conf template; '
+            'falling back to bundled defaults'.format(image=image_name)
+        )
+        return None
+
+    return content
+
+
+def _load_default_admintools_conf() -> str:
+    """Return the best available ``admintools.conf`` template."""
+
+    global _DEFAULT_ADMINTOOLS_CONF_CACHE
+
+    if _DEFAULT_ADMINTOOLS_CONF_CACHE is not None:
+        return _DEFAULT_ADMINTOOLS_CONF_CACHE
+
+    template = _image_default_admintools_conf()
+    if template:
+        if not template.endswith('\n'):
+            template += '\n'
+        _DEFAULT_ADMINTOOLS_CONF_CACHE = template
+        return template
+
+    _DEFAULT_ADMINTOOLS_CONF_CACHE = DEFAULT_ADMINTOOLS_CONF
+    return _DEFAULT_ADMINTOOLS_CONF_CACHE
+
+
 def _seed_default_admintools_conf(config_dir: Path) -> tuple[bool, bool]:
     """Ensure ``admintools.conf`` exists with safe defaults.
 
@@ -995,7 +1099,7 @@ def _seed_default_admintools_conf(config_dir: Path) -> tuple[bool, bool]:
         return False, False
 
     try:
-        admintools_conf.write_text(DEFAULT_ADMINTOOLS_CONF)
+        admintools_conf.write_text(_load_default_admintools_conf())
     except OSError as exc:
         log(f'Unable to write default admintools.conf at {admintools_conf}: {exc}')
         return False, False
