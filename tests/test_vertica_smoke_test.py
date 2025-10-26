@@ -26,6 +26,11 @@ def _reset_same_file_state(monkeypatch):
     monkeypatch.setattr(smoke, '_VERTICA_CONFIG_SAME_FILE_RECOVERED', set())
 
 
+@pytest.fixture(autouse=True)
+def _reset_admintools_template_cache(monkeypatch):
+    monkeypatch.setattr(smoke, '_DEFAULT_ADMINTOOLS_CONF_CACHE', None, raising=False)
+
+
 def _set_fixed_now(monkeypatch, moment: datetime) -> None:
     original_datetime = smoke.datetime
 
@@ -817,6 +822,23 @@ def test_seed_default_admintools_conf(tmp_path, monkeypatch):
     assert 'hosts = 127.0.0.1' in content
     assert 'node0001 = 127.0.0.1' in content
     assert conf_path.stat().st_mode & 0o777 == 0o666
+
+
+def test_seed_default_admintools_conf_uses_image_template(tmp_path, monkeypatch):
+    config_dir = tmp_path / 'config'
+    config_dir.mkdir()
+
+    template = smoke.DEFAULT_ADMINTOOLS_CONF.replace('format = 3', 'format = 42')
+
+    monkeypatch.setattr(smoke, '_image_default_admintools_conf', lambda: template)
+
+    success, changed = smoke._seed_default_admintools_conf(config_dir)
+
+    assert success is True
+    assert changed is True
+
+    content = (config_dir / 'admintools.conf').read_text()
+    assert 'format = 42' in content
 
 
 def test_seed_default_admintools_conf_is_idempotent(tmp_path, monkeypatch):
