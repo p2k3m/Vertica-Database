@@ -898,6 +898,50 @@ def test_seed_default_admintools_conf_removes_symlink(tmp_path, monkeypatch):
     assert any('Removing symlinked admintools.conf' in entry for entry in logs)
 
 
+def test_image_default_admintools_conf_uses_known_paths(monkeypatch):
+    monkeypatch.setattr(smoke, '_resolve_vertica_image_name', lambda: 'image')
+    monkeypatch.setattr(smoke.shutil, 'which', lambda _: '/usr/bin/docker')
+
+    captured_args: list[list[str]] = []
+
+    def fake_run(args, capture_output=True, text=True, **kwargs):
+        captured_args.append(args)
+        assert args[:5] == ['docker', 'run', '--rm', '--entrypoint', '/bin/sh']
+        assert args[5] == 'image'
+        assert args[6] == '-c'
+        script = args[7]
+        assert 'find /opt/vertica -maxdepth 6 -type f -name admintools.conf' in script
+        assert args[8] == '--'
+        assert '/opt/vertica/config/admintools.conf' in args[9:]
+        assert '/opt/vertica/config/admintools/admintools.conf' in args[9:]
+        assert '/opt/vertica/share/admintools/admintools.conf' in args[9:]
+        return subprocess.CompletedProcess(args, 0, stdout='template-content', stderr='')
+
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    template = smoke._image_default_admintools_conf()
+
+    assert template == 'template-content'
+    assert captured_args
+
+
+def test_image_default_admintools_conf_logs_failure(monkeypatch):
+    logs: list[str] = []
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke, '_resolve_vertica_image_name', lambda: 'image')
+    monkeypatch.setattr(smoke.shutil, 'which', lambda _: '/usr/bin/docker')
+
+    def fake_run(args, capture_output=True, text=True, **kwargs):
+        return subprocess.CompletedProcess(args, 1, stdout='', stderr='cat: not found\n')
+
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    assert smoke._image_default_admintools_conf() is None
+    assert any('[stderr] cat: not found' in entry for entry in logs)
+    assert any('Failed to extract admintools.conf template from Vertica image image' in entry for entry in logs)
+
+
 def test_synchronize_container_admintools_conf_success(tmp_path, monkeypatch):
     source = tmp_path / 'admintools.conf'
     source.write_text('test')
