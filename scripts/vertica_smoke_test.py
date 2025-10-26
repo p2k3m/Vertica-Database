@@ -1367,6 +1367,115 @@ def _container_dbadmin_identity(container: str) -> Optional[tuple[int, int]]:
         return None
 
 
+def _align_container_path_identity(container: str, path: str, friendly_name: str) -> tuple[bool, bool]:
+    """Attempt to align ``path`` ownership with ``dbadmin`` inside ``container``.
+
+    Returns a tuple ``(success, adjusted)`` where ``success`` indicates the
+    alignment check completed without errors and ``adjusted`` is ``True`` when
+    ownership changes were applied.
+    """
+
+    if shutil.which('docker') is None:
+        return False, False
+
+    quoted_path = shlex.quote(path)
+
+    def _docker_exec(user: str, command: str, missing_cli_message: str) -> Optional[subprocess.CompletedProcess[str]]:
+        try:
+            return subprocess.run(
+                [
+                    'docker',
+                    'exec',
+                    '--user',
+                    user,
+                    container,
+                    'sh',
+                    '-c',
+                    command,
+                ],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            log(missing_cli_message)
+            return None
+
+    target_identity = _container_dbadmin_identity(container)
+    require_named_chown = target_identity is None
+    adjusted = False
+
+    if target_identity is not None:
+        uid, gid = target_identity
+        owner_result = _docker_exec(
+            '0',
+            f'stat -c "%u:%g" {quoted_path}',
+            'Docker CLI is not available while inspecting admintools.conf ownership inside container',
+        )
+        if owner_result is None:
+            return False, adjusted
+        if owner_result.returncode == 0:
+            owner_output = owner_result.stdout.strip()
+            if owner_output:
+                try:
+                    current_uid_str, current_gid_str = owner_output.split(':', 1)
+                    current_identity = (int(current_uid_str), int(current_gid_str))
+                except ValueError:
+                    current_identity = None
+                    log(
+                        'Unexpected ownership output for admintools.conf inside container: '
+                        f'{owner_output!r}'
+                    )
+                else:
+                    if current_identity == target_identity:
+                        return True, adjusted
+            else:
+                require_named_chown = True
+        else:
+            require_named_chown = True
+
+        chown_result = _docker_exec(
+            '0',
+            f'chown {uid}:{gid} {quoted_path}',
+            f'Docker CLI is not available while adjusting {friendly_name} inside container',
+        )
+        if chown_result is None:
+            return False, adjusted
+        if chown_result.stdout:
+            log(chown_result.stdout.rstrip())
+        if chown_result.stderr:
+            log(f'[stderr] {chown_result.stderr.rstrip()}')
+        if chown_result.returncode == 0:
+            log(
+                f'Aligned {friendly_name} inside container with dbadmin '
+                f'(uid {uid} gid {gid})'
+            )
+            adjusted = True
+        else:
+            log(f'Failed to adjust {friendly_name} inside container')
+            require_named_chown = True
+
+    if require_named_chown:
+        chown_result = _docker_exec(
+            '0',
+            f'chown dbadmin:dbadmin {quoted_path}',
+            f'Docker CLI is not available while aligning {friendly_name} inside container',
+        )
+        if chown_result is None:
+            return False, adjusted
+        if chown_result.stdout:
+            log(chown_result.stdout.rstrip())
+        if chown_result.stderr:
+            log(f'[stderr] {chown_result.stderr.rstrip()}')
+        if chown_result.returncode == 0:
+            log(f'Aligned {friendly_name} inside container with dbadmin account')
+            adjusted = True
+        else:
+            log(f'Failed to align {friendly_name} inside container using dbadmin account')
+            return False, adjusted
+
+    return True, adjusted
+
+
 def _ensure_container_admintools_conf_readable(container: str) -> bool:
     """Relax permissions on ``admintools.conf`` inside ``container`` if required.
 
@@ -1406,73 +1515,13 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
     if exists_result is None or exists_result.returncode != 0:
         return False
 
-    adjustments_made = False
-
-    target_identity = _container_dbadmin_identity(container)
-    require_named_chown = target_identity is None
-
-    if target_identity is not None:
-        owner_result = _docker_exec(
-            '0',
-            f'stat -c "%u:%g" {quoted_path}',
-            'Docker CLI is not available while inspecting admintools.conf ownership inside container',
-        )
-        if owner_result is None:
-            return False
-        if owner_result.returncode == 0:
-            owner_output = owner_result.stdout.strip()
-            if owner_output:
-                try:
-                    current_uid_str, current_gid_str = owner_output.split(':', 1)
-                    current_identity = (int(current_uid_str), int(current_gid_str))
-                except ValueError:
-                    current_identity = None
-                    log(f'Unexpected ownership output for admintools.conf inside container: {owner_output!r}')
-                else:
-                    if current_identity != target_identity:
-                        uid, gid = target_identity
-                        chown_result = _docker_exec(
-                            '0',
-                            f'chown {uid}:{gid} {quoted_path}',
-                            'Docker CLI is not available while adjusting admintools.conf ownership inside container',
-                        )
-                        if chown_result is None:
-                            return False
-                        if chown_result.stdout:
-                            log(chown_result.stdout.rstrip())
-                        if chown_result.stderr:
-                            log(f'[stderr] {chown_result.stderr.rstrip()}')
-                        if chown_result.returncode == 0:
-                            adjustments_made = True
-                            log(
-                                'Aligned admintools.conf ownership inside container '
-                                f'with dbadmin (uid {uid} gid {gid})'
-                            )
-                        else:
-                            log('Failed to adjust admintools.conf ownership inside container')
-                            require_named_chown = True
-            else:
-                require_named_chown = True
-        else:
-            require_named_chown = True
-
-    if require_named_chown:
-        chown_result = _docker_exec(
-            '0',
-            f'chown dbadmin:dbadmin {quoted_path}',
-            'Docker CLI is not available while aligning admintools.conf ownership inside container',
-        )
-        if chown_result is None:
-            return False
-        if chown_result.stdout:
-            log(chown_result.stdout.rstrip())
-        if chown_result.stderr:
-            log(f'[stderr] {chown_result.stderr.rstrip()}')
-        if chown_result.returncode == 0:
-            adjustments_made = True
-            log('Aligned admintools.conf ownership inside container with dbadmin account')
-        else:
-            log('Failed to align admintools.conf ownership inside container using dbadmin account')
+    success, adjustments_made = _align_container_path_identity(
+        container,
+        _VERTICA_CONTAINER_ADMINTOOLS_PATH,
+        'admintools.conf ownership',
+    )
+    if not success:
+        return adjustments_made
 
     readable_result = _docker_exec(
         'dbadmin',
@@ -1504,38 +1553,24 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
 
     if fix_result.returncode != 0:
         log('Failed to adjust admintools.conf permissions inside container')
-        return True
+        return adjustments_made
 
-    readable_result = _docker_exec(
-        'dbadmin',
-        f'test -r {quoted_path}',
-        'Docker CLI is not available while validating admintools.conf permissions inside container',
-    )
-    if readable_result is None:
-        return True
-    if readable_result.returncode == 0:
-        return True
-
-    parent_dir = shlex.quote(str(Path(_VERTICA_CONTAINER_ADMINTOOLS_PATH).parent))
-
-    dir_fix_result = _docker_exec(
+    directory_result = _docker_exec(
         '0',
-        f'chmod a+rx {parent_dir}',
+        f'chmod a+rx {shlex.quote(os.path.dirname(_VERTICA_CONTAINER_ADMINTOOLS_PATH))}',
         'Docker CLI is not available while adjusting admintools.conf directory permissions inside container',
     )
-    if dir_fix_result is None:
-        return True
+    if directory_result is None:
+        return adjustments_made
 
-    adjustments_made = True
+    if directory_result.stdout:
+        log(directory_result.stdout.rstrip())
+    if directory_result.stderr:
+        log(f'[stderr] {directory_result.stderr.rstrip()}')
 
-    if dir_fix_result.stdout:
-        log(dir_fix_result.stdout.rstrip())
-    if dir_fix_result.stderr:
-        log(f'[stderr] {dir_fix_result.stderr.rstrip()}')
-
-    if dir_fix_result.returncode != 0:
+    if directory_result.returncode != 0:
         log('Failed to adjust admintools.conf directory permissions inside container')
-        return True
+        return adjustments_made
 
     readable_result = _docker_exec(
         'dbadmin',
@@ -1543,11 +1578,12 @@ def _ensure_container_admintools_conf_readable(container: str) -> bool:
         'Docker CLI is not available while validating admintools.conf permissions inside container',
     )
     if readable_result is None:
-        return True
+        return adjustments_made
+
     if readable_result.returncode != 0:
         log('Unable to verify admintools.conf readability inside container after permission adjustments')
 
-    return True
+    return adjustments_made
 
 
 def _write_container_admintools_conf(container: str, target: str, content: str) -> bool:
@@ -1606,6 +1642,15 @@ def _write_container_admintools_conf(container: str, target: str, content: str) 
         return False
 
     log(f'Seeded admintools.conf inside Vertica container at {target} using exec fallback')
+
+    success, _ = _align_container_path_identity(
+        container,
+        target,
+        'admintools.conf ownership',
+    )
+    if not success:
+        return False
+
     return True
 
 
@@ -1866,6 +1911,14 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
                     if not _write_container_admintools_conf(container, container_target, content):
                         overall_success = False
                     continue
+
+                success, _ = _align_container_path_identity(
+                    container,
+                    container_target,
+                    'admintools.conf ownership',
+                )
+                if not success:
+                    overall_success = False
     except OSError as exc:
         log(f'Unable to stage admintools.conf for container synchronization: {exc}')
         return False
