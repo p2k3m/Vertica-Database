@@ -269,7 +269,62 @@ if ! docker pull "$VERTICA_IMAGE"; then
 fi
 
 # Start Vertica only
+
 (docker compose -f /opt/compose.remote.yml up -d) || (docker-compose -f /opt/compose.remote.yml up -d)
+
+# Recent Vertica container images run admintools as the ``dbadmin`` user and
+# require that ``admintools.conf`` is owned by that account.  When the
+# persistent volume is mounted from the host with a different ownership Vertica
+# shuts down repeatedly with ``admintools cannot be run with the current system
+# state`` errors.  Attempt to discover the in-container UID/GID for ``dbadmin``
+# and align the ownership of the persistent data directory accordingly.
+echo "[user-data] Attempting to align Vertica data ownership with container dbadmin user"
+ownership_deadline=$((SECONDS + 300))
+ownership_aligned=0
+while [ $SECONDS -lt $ownership_deadline ]; do
+  if ! docker inspect vertica_ce >/dev/null 2>&1; then
+    sleep 5
+    continue
+  fi
+
+  if ! docker exec vertica_ce test -d /data/vertica 2>/dev/null; then
+    sleep 5
+    continue
+  fi
+
+  if ! docker exec vertica_ce test -e /opt/vertica/config/admintools.conf 2>/dev/null; then
+    sleep 5
+    continue
+  fi
+
+  if ! docker exec --user root vertica_ce getent passwd dbadmin >/dev/null 2>&1; then
+    echo "[user-data] Container dbadmin account not available yet; retrying"
+    sleep 5
+    continue
+  fi
+
+  target_uid=$(docker exec --user root vertica_ce id -u dbadmin 2>/dev/null || true)
+  target_gid=$(docker exec --user root vertica_ce id -g dbadmin 2>/dev/null || true)
+
+  if [[ -z "$target_uid" || -z "$target_gid" ]]; then
+    echo "[user-data] Unable to determine dbadmin UID/GID inside container; retrying"
+    sleep 5
+    continue
+  fi
+
+  if docker exec --user root vertica_ce chown -R "$${target_uid}:$${target_gid}" /data/vertica 2>/dev/null; then
+    ownership_aligned=1
+    echo "[user-data] Vertica data ownership aligned to dbadmin ($${target_uid}:$${target_gid})"
+    break
+  fi
+
+  echo "[user-data] Failed to adjust Vertica data ownership; retrying"
+  sleep 5
+done
+
+if [ "$ownership_aligned" -ne 1 ]; then
+  echo "[user-data] Proceeding without verifying Vertica data ownership alignment" >&2
+fi
 
 # Wait for the Vertica container to accept connections on the database port
 deadline=$((SECONDS + 1800))
