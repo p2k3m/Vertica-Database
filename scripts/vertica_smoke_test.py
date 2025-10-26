@@ -948,6 +948,19 @@ def _image_default_admintools_conf() -> Optional[str]:
     if shutil.which('docker') is None:
         return None
 
+    try:
+        _ensure_ecr_login_for_image(image_name)
+    except SystemExit as exc:
+        detail = exc.code
+        log(
+            'Unable to authenticate with registry for Vertica image '
+            f'{image_name} while extracting admintools.conf template; '
+            'falling back to bundled defaults'
+        )
+        if detail not in (None, 0):
+            log(f'[detail] {detail}')
+        return None
+
     search_paths = [
         '/opt/vertica/config/admintools.conf',
         '/opt/vertica/config/admintools/admintools.conf',
