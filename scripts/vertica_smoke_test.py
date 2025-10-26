@@ -168,6 +168,8 @@ _ADMINTOOLS_CONF_MISSING_OBSERVED_AT: dict[Path, float] = {}
 # distinguish a fresh bootstrap (where we must wait for Vertica to copy the
 # defaults) from a corrupted installation that genuinely needs recovery.
 _ADMINTOOLS_CONF_SEEDED_AT: dict[Path, float] = {}
+_VERTICA_CONTAINER_RESTART_THROTTLE_SECONDS = 60.0
+_LAST_VERTICA_CONTAINER_RESTART: Optional[float] = None
 _OBSERVED_VERTICA_CONFIG_DIRECTORIES: set[Path] = set()
 
 
@@ -718,6 +720,8 @@ def _sanitize_vertica_data_directories() -> None:
                             'vertica_ce', _VERTICA_CONTAINER_ADMINTOOLS_PATH
                         )
 
+                        should_restart = seed_changed or synchronized
+
                         if container_has_admintools is True:
                             log('Seeded default admintools.conf to assist Vertica recovery')
                             _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
@@ -728,11 +732,18 @@ def _sanitize_vertica_data_directories() -> None:
                                 'recovery but configuration remains missing inside '
                                 'container; continuing to monitor'
                             )
+                            should_restart = True
                         else:
                             log(
                                 'Seeded default admintools.conf to assist Vertica '
                                 'recovery but was unable to verify configuration '
                                 'inside container; continuing to monitor'
+                            )
+                            should_restart = True
+
+                        if should_restart:
+                            _restart_vertica_container(
+                                'vertica_ce', 'apply seeded admintools.conf'
                             )
                         continue
 
@@ -1601,6 +1612,39 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
         return False
 
     return overall_success
+
+
+def _restart_vertica_container(container: str, reason: str) -> bool:
+    """Restart ``container`` when enough time has elapsed since the last restart."""
+
+    global _LAST_VERTICA_CONTAINER_RESTART
+
+    now = time.time()
+    if (
+        _LAST_VERTICA_CONTAINER_RESTART is not None
+        and now - _LAST_VERTICA_CONTAINER_RESTART
+        < _VERTICA_CONTAINER_RESTART_THROTTLE_SECONDS
+    ):
+        elapsed = now - _LAST_VERTICA_CONTAINER_RESTART
+        log(
+            f'Skipping restart of {container} ({reason}); last restart '
+            f'{elapsed:.0f}s ago'
+        )
+        return False
+
+    log(f'Restarting {container} to {reason}')
+    try:
+        run_command(['docker', 'restart', container])
+    except CommandError as exc:
+        log(
+            f'Failed to restart {container} to {reason}: '
+            f'exit code {exc.returncode}'
+        )
+        return False
+
+    _LAST_VERTICA_CONTAINER_RESTART = now
+    time.sleep(5)
+    return True
 
 
 def _container_path_exists(container: str, path: str) -> Optional[bool]:

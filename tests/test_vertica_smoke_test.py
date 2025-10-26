@@ -15,6 +15,11 @@ os.environ.setdefault('ADMIN_PASSWORD', 'test-password')
 smoke = importlib.import_module('scripts.vertica_smoke_test')
 
 
+@pytest.fixture(autouse=True)
+def _disable_container_restart(monkeypatch):
+    monkeypatch.setattr(smoke, '_restart_vertica_container', lambda *args, **kwargs: False)
+
+
 def _set_fixed_now(monkeypatch, moment: datetime) -> None:
     original_datetime = smoke.datetime
 
@@ -685,6 +690,58 @@ def test_sanitize_defers_seeding_until_config_observed(tmp_path, monkeypatch):
     smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
     smoke._ADMINTOOLS_CONF_SEEDED_AT.clear()
     smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.clear()
+
+
+def test_sanitize_restarts_container_after_admintools_seed(tmp_path, monkeypatch):
+    base = tmp_path / 'data'
+    base.mkdir()
+    config_dir = base / 'config'
+    config_dir.mkdir()
+
+    logs: list[str] = []
+    restart_requests: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base])
+    monkeypatch.setattr(smoke, '_ensure_known_identity_tree', lambda *args, **kwargs: None)
+    monkeypatch.setattr(smoke, '_ensure_known_identity', lambda path: None)
+    monkeypatch.setattr(smoke, '_ensure_vertica_admin_identity', lambda path: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 600.0)
+    monkeypatch.setattr(smoke, '_container_restart_count', lambda container: 0)
+
+    def fake_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return 'unhealthy'
+        raise AssertionError(f'unexpected template: {template}')
+
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_inspect)
+
+    def fake_seed(path: Path) -> tuple[bool, bool]:
+        path.mkdir(parents=True, exist_ok=True)
+        (path / 'admintools.conf').write_text('test')
+        return True, True
+
+    monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
+    monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda *args, **kwargs: True)
+
+    def record_restart(container: str, reason: str) -> bool:
+        restart_requests.append((container, reason))
+        return True
+
+    monkeypatch.setattr(smoke, '_restart_vertica_container', record_restart)
+
+    observed = {config_dir, base / 'vertica' / 'config', base / smoke.DB_NAME / 'config'}
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.update(observed)
+    smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT[config_dir] = 0.0
+
+    smoke._sanitize_vertica_data_directories()
+
+    assert restart_requests == [('vertica_ce', 'apply seeded admintools.conf')]
+
+    smoke._OBSERVED_VERTICA_CONFIG_DIRECTORIES.clear()
+    smoke._ADMINTOOLS_CONF_MISSING_OBSERVED_AT.clear()
 
 
 def test_seed_default_admintools_conf(tmp_path, monkeypatch):
