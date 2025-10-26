@@ -16,7 +16,7 @@ import textwrap
 import time
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from typing import Optional
@@ -482,16 +482,20 @@ def _sanitize_vertica_data_directories() -> None:
                     elif normalized_target == '/opt/vertica/config':
                         remove_symlink = True
                     else:
-                        try:
-                            if os.path.isabs(target):
-                                resolved_target = Path(target).resolve()
-                            else:
-                                resolved_target = (config_path.parent / target).resolve()
-                        except FileNotFoundError:
-                            resolved_target = None
-
-                        if resolved_target and resolved_target == Path('/opt/vertica/config'):
+                        target_parts = PurePosixPath(normalized_target).parts
+                        if target_parts[-3:] == ('opt', 'vertica', 'config'):
                             remove_symlink = True
+                        else:
+                            try:
+                                if os.path.isabs(target):
+                                    resolved_target = Path(target).resolve()
+                                else:
+                                    resolved_target = (config_path.parent / target).resolve()
+                            except FileNotFoundError:
+                                resolved_target = None
+
+                            if resolved_target and resolved_target == Path('/opt/vertica/config'):
+                                remove_symlink = True
 
                     if remove_symlink:
                         log(

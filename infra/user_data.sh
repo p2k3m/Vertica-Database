@@ -204,6 +204,7 @@ for base_path in /var/lib/vertica /data/vertica; do
   if [ -L "$config_path" ]; then
     target="$(readlink "$config_path" 2>/dev/null || true)"
     resolved="$(readlink -f "$config_path" 2>/dev/null || true)"
+    normalized="$(readlink -m "$config_path" 2>/dev/null || true)"
     case "$target" in
       /opt/vertica/config|opt/vertica/config)
         echo "[user-data] Removing stale Vertica config symlink at $config_path -> $target"
@@ -212,7 +213,7 @@ for base_path in /var/lib/vertica /data/vertica; do
         ;;
     esac
 
-    if [ "$resolved" = "/opt/vertica/config" ]; then
+    if [ "$resolved" = "/opt/vertica/config" ] || [ "$normalized" = "/opt/vertica/config" ]; then
       echo "[user-data] Removing stale Vertica config symlink at $config_path -> $target (resolved $resolved)"
       rm -f "$config_path"
       continue
@@ -231,6 +232,7 @@ for base_path in /var/lib/vertica /data/vertica; do
   if [ -L "$admintools_conf" ]; then
     target="$(readlink "$admintools_conf" 2>/dev/null || true)"
     resolved="$(readlink -f "$admintools_conf" 2>/dev/null || true)"
+    normalized="$(readlink -m "$admintools_conf" 2>/dev/null || true)"
 
     remove_symlink=false
     if [ -n "$target" ]; then
@@ -244,7 +246,8 @@ for base_path in /var/lib/vertica /data/vertica; do
       fi
     fi
 
-    if [ "$resolved" = "/opt/vertica/config/admintools.conf" ]; then
+    if [ "$resolved" = "/opt/vertica/config/admintools.conf" ] || \
+       [ "$normalized" = "/opt/vertica/config/admintools.conf" ]; then
       remove_symlink=true
     fi
 
