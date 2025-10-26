@@ -906,6 +906,50 @@ def test_synchronize_container_admintools_conf_success(tmp_path, monkeypatch):
     assert any('Copied admintools.conf into Vertica container' in entry for entry in logs)
 
 
+def test_synchronize_container_admintools_conf_recovers_non_directory_parent(tmp_path, monkeypatch):
+    source = tmp_path / 'admintools.conf'
+    source.write_text('test')
+
+    logs: list[str] = []
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda cmd: '/usr/bin/docker' if cmd == 'docker' else None)
+    monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: True)
+
+    mkdir_attempts: list[int] = []
+
+    def fake_run(args, capture_output=True, text=True, **kwargs):
+        if args[:3] == ['docker', 'exec', '--user']:
+            assert args[3] == '0'
+            assert args[4] == 'vertica_ce'
+            command = args[5:]
+            if command == ['rm', '-f', '/opt/vertica/config/admintools.conf']:
+                return subprocess.CompletedProcess(args, 0, '', '')
+            if command == ['mkdir', '-p', '/opt/vertica/config']:
+                mkdir_attempts.append(1)
+                if len(mkdir_attempts) == 1:
+                    return subprocess.CompletedProcess(
+                        args,
+                        1,
+                        '',
+                        "mkdir: cannot create directory '/opt/vertica/config': File exists",
+                    )
+                return subprocess.CompletedProcess(args, 0, '', '')
+            if command == ['rm', '-rf', '/opt/vertica/config']:
+                return subprocess.CompletedProcess(args, 0, '', '')
+        if args[:2] == ['docker', 'cp']:
+            assert args[2].endswith('admintools.conf')
+            assert args[3] == 'vertica_ce:/opt/vertica/config/admintools.conf'
+            return subprocess.CompletedProcess(args, 0, '', '')
+        raise AssertionError(args)
+
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    assert smoke._synchronize_container_admintools_conf('vertica_ce', source) is True
+    assert any('attempting to rebuild directory' in entry for entry in logs)
+    assert any('Rebuilt admintools.conf directory inside container' in entry for entry in logs)
+
+
 def test_synchronize_container_admintools_conf_fallback(tmp_path, monkeypatch):
     source = tmp_path / 'admintools.conf'
     source.write_text('test')
@@ -926,6 +970,7 @@ def test_synchronize_container_admintools_conf_fallback(tmp_path, monkeypatch):
                 script = args[7]
                 assert '__VERTICA_ADMINTOOLS_CONF__' in script
                 assert "/opt/vertica/config/admintools.conf" in script
+                assert 'rm -rf /opt/vertica/config' in script
                 return subprocess.CompletedProcess(args, 0, '', '')
         if args[:2] == ['docker', 'cp']:
             return subprocess.CompletedProcess(args, 1, '', 'cp failed')
