@@ -1295,6 +1295,54 @@ def test_vertica_admin_identity_candidates_includes_known_fallback(monkeypatch):
     ) in candidates
 
 
+def test_discover_existing_vertica_admin_identities_prefers_non_root(tmp_path, monkeypatch):
+    base = tmp_path / 'vertica'
+    config_dir = base / 'config'
+    config_dir.mkdir(parents=True)
+
+    candidate = config_dir / 'agent.conf'
+    candidate.write_text('test')
+
+    os.chown(candidate, 4242, 4343)
+
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base], raising=False)
+    monkeypatch.setattr(smoke.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(smoke.os, 'getegid', lambda: 0)
+
+    identities = smoke._discover_existing_vertica_admin_identities()
+
+    assert identities and identities[0] == (4242, 4343)
+
+
+def test_ensure_vertica_admin_identity_uses_discovered_candidates(tmp_path, monkeypatch):
+    base = tmp_path / 'vertica'
+    config_dir = base / 'config'
+    config_dir.mkdir(parents=True)
+
+    target = config_dir / 'admintools.conf'
+    target.write_text('test')
+
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base], raising=False)
+    monkeypatch.setattr(smoke.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(smoke, '_vertica_admin_identity_candidates', lambda: [])
+    monkeypatch.setattr(
+        smoke,
+        '_discover_existing_vertica_admin_identities',
+        lambda **kwargs: [(4242, 4343)],
+    )
+
+    chown_calls: list[tuple[Path, int, int]] = []
+
+    def fake_chown(path, uid, gid):
+        chown_calls.append((Path(path), uid, gid))
+
+    monkeypatch.setattr(smoke.os, 'chown', fake_chown)
+
+    smoke._ensure_vertica_admin_identity(target)
+
+    assert chown_calls == [(target, 4242, 4343)]
+
+
 def test_ensure_container_admintools_conf_readable_adjusts(monkeypatch):
     logs: list[str] = []
     calls: list[list[str]] = []

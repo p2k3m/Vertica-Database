@@ -15,6 +15,7 @@ import tempfile
 import textwrap
 import time
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError
@@ -275,6 +276,81 @@ def _vertica_admin_identity_candidates() -> list[tuple[int, int]]:
     return candidates
 
 
+def _discover_existing_vertica_admin_identities(
+    *, max_depth: int = 3
+) -> list[tuple[int, int]]:
+    """Return uid/gid pairs observed within existing Vertica data directories."""
+
+    counts: Counter[tuple[int, int]] = Counter()
+    visited: set[Path] = set()
+
+    for base in VERTICA_DATA_DIRECTORIES:
+        if not base.exists():
+            continue
+
+        stack: list[tuple[Path, int]] = [(base, 0)]
+
+        while stack:
+            current, depth = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+
+            try:
+                stat_info = current.stat(follow_symlinks=False)
+            except OSError:
+                continue
+
+            identity = (stat_info.st_uid, stat_info.st_gid)
+            counts[identity] += 1
+
+            if depth >= max_depth:
+                continue
+
+            try:
+                is_dir = current.is_dir()
+            except OSError:
+                continue
+
+            if not is_dir:
+                continue
+
+            try:
+                with os.scandir(current) as entries:
+                    for entry in entries:
+                        child_path = Path(entry.path)
+                        try:
+                            child_stat = entry.stat(follow_symlinks=False)
+                        except OSError:
+                            continue
+
+                        child_identity = (child_stat.st_uid, child_stat.st_gid)
+                        counts[child_identity] += 1
+
+                        if depth + 1 <= max_depth:
+                            try:
+                                is_child_dir = entry.is_dir(follow_symlinks=False)
+                            except OSError:
+                                continue
+
+                            if is_child_dir:
+                                stack.append((child_path, depth + 1))
+            except OSError:
+                continue
+
+    root_identity = (0, 0)
+    host_identity = (os.geteuid(), os.getegid())
+    ignored = {root_identity, host_identity}
+
+    identities: list[tuple[int, int]] = []
+    for identity, _ in counts.most_common():
+        if identity in ignored:
+            continue
+        identities.append(identity)
+
+    return identities
+
+
 def _ensure_vertica_admin_identity(path: Path) -> None:
     """Attempt to align ``path`` ownership with the Vertica admin identity."""
 
@@ -291,6 +367,13 @@ def _ensure_vertica_admin_identity(path: Path) -> None:
         return
 
     candidates = _vertica_admin_identity_candidates()
+    seen_candidates = set(candidates)
+
+    for identity in _discover_existing_vertica_admin_identities():
+        if identity not in seen_candidates:
+            candidates.append(identity)
+            seen_candidates.add(identity)
+
     if not candidates:
         return
 
