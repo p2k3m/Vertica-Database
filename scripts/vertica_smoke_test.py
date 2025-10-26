@@ -1423,6 +1423,7 @@ def _write_container_admintools_conf(container: str, target: str, content: str) 
     script = '\n'.join(
         [
             'set -e',
+            f'if [ -e {quoted_parent} ] && [ ! -d {quoted_parent} ]; then rm -rf {quoted_parent}; fi',
             f'mkdir -p {quoted_parent}',
             f"cat <<'{heredoc}' > {quoted_target}",
             content,
@@ -1580,17 +1581,96 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
                     return False
 
                 if mkdir_result.returncode != 0:
-                    if mkdir_result.stdout:
-                        log(mkdir_result.stdout.rstrip())
-                    if mkdir_result.stderr:
-                        log(f'[stderr] {mkdir_result.stderr.rstrip()}')
-                    log(
-                        'Failed to prepare admintools.conf directory inside container; '
-                        'attempting exec fallback'
-                    )
-                    if not _write_container_admintools_conf(container, container_target, content):
-                        overall_success = False
-                    continue
+                    mkdir_stdout = mkdir_result.stdout.rstrip() if mkdir_result.stdout else ''
+                    mkdir_stderr = mkdir_result.stderr.rstrip() if mkdir_result.stderr else ''
+                    if mkdir_stdout:
+                        log(mkdir_stdout)
+                    if mkdir_stderr:
+                        log(f'[stderr] {mkdir_stderr}')
+
+                    retried_mkdir = False
+                    if 'File exists' in mkdir_stderr or 'Not a directory' in mkdir_stderr:
+                        log(
+                            'Detected non-directory entry for admintools.conf parent inside container; '
+                            'attempting to rebuild directory'
+                        )
+                        try:
+                            remove_result = subprocess.run(
+                                [
+                                    'docker',
+                                    'exec',
+                                    '--user',
+                                    '0',
+                                    container,
+                                    'rm',
+                                    '-rf',
+                                    container_parent,
+                                ],
+                                capture_output=True,
+                                text=True,
+                            )
+                        except FileNotFoundError:
+                            log(
+                                'Docker CLI is not available while removing existing admintools.conf parent '
+                                'inside container'
+                            )
+                            remove_result = None
+
+                        if remove_result is not None:
+                            if remove_result.stdout:
+                                log(remove_result.stdout.rstrip())
+                            if remove_result.stderr:
+                                log(f'[stderr] {remove_result.stderr.rstrip()}')
+
+                            if remove_result.returncode == 0:
+                                try:
+                                    mkdir_retry = subprocess.run(
+                                        [
+                                            'docker',
+                                            'exec',
+                                            '--user',
+                                            '0',
+                                            container,
+                                            'mkdir',
+                                            '-p',
+                                            container_parent,
+                                        ],
+                                        capture_output=True,
+                                        text=True,
+                                    )
+                                except FileNotFoundError:
+                                    mkdir_retry = None
+                                    log(
+                                        'Docker CLI is not available while preparing admintools.conf '
+                                        'directory inside container'
+                                    )
+                                else:
+                                    retried_mkdir = True
+                                    if mkdir_retry.stdout:
+                                        log(mkdir_retry.stdout.rstrip())
+                                    if mkdir_retry.stderr:
+                                        log(f'[stderr] {mkdir_retry.stderr.rstrip()}')
+                                    if mkdir_retry.returncode == 0:
+                                        log(
+                                            'Rebuilt admintools.conf directory inside container after removing '
+                                            'conflicting entry'
+                                        )
+                                        mkdir_result = mkdir_retry
+
+                    if mkdir_result.returncode != 0:
+                        if not retried_mkdir:
+                            log(
+                                'Failed to prepare admintools.conf directory inside container; '
+                                'attempting exec fallback'
+                            )
+                        else:
+                            log(
+                                'Failed to prepare admintools.conf directory inside container after '
+                                'rebuilding conflicting entry; attempting exec fallback'
+                            )
+                        if not _write_container_admintools_conf(container, container_target, content):
+                            overall_success = False
+                        continue
 
                 try:
                     copy_result = subprocess.run(
