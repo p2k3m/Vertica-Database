@@ -902,6 +902,14 @@ def test_image_default_admintools_conf_uses_known_paths(monkeypatch):
     monkeypatch.setattr(smoke, '_resolve_vertica_image_name', lambda: 'image')
     monkeypatch.setattr(smoke.shutil, 'which', lambda _: '/usr/bin/docker')
 
+    login_calls: list[str] = []
+
+    def fake_login(image_name: str) -> bool:
+        login_calls.append(image_name)
+        return True
+
+    monkeypatch.setattr(smoke, '_ensure_ecr_login_for_image', fake_login)
+
     captured_args: list[list[str]] = []
 
     def fake_run(args, capture_output=True, text=True, **kwargs):
@@ -923,6 +931,7 @@ def test_image_default_admintools_conf_uses_known_paths(monkeypatch):
 
     assert template == 'template-content'
     assert captured_args
+    assert login_calls == ['image']
 
 
 def test_image_default_admintools_conf_logs_failure(monkeypatch):
@@ -940,6 +949,31 @@ def test_image_default_admintools_conf_logs_failure(monkeypatch):
     assert smoke._image_default_admintools_conf() is None
     assert any('[stderr] cat: not found' in entry for entry in logs)
     assert any('Failed to extract admintools.conf template from Vertica image image' in entry for entry in logs)
+
+
+def test_image_default_admintools_conf_handles_login_failure(monkeypatch):
+    logs: list[str] = []
+
+    monkeypatch.setattr(smoke, 'log', logs.append)
+
+    image_name = '123456789012.dkr.ecr.us-east-1.amazonaws.com/vertica-ce:latest'
+
+    monkeypatch.setattr(smoke, '_resolve_vertica_image_name', lambda: image_name)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda _: '/usr/bin/docker')
+
+    def fake_login(_: str) -> bool:
+        raise SystemExit('login failed')
+
+    monkeypatch.setattr(smoke, '_ensure_ecr_login_for_image', fake_login)
+
+    def fail_run(*args, **kwargs):  # pragma: no cover - should not be invoked
+        raise AssertionError('docker run should not be invoked when registry login fails')
+
+    monkeypatch.setattr(smoke.subprocess, 'run', fail_run)
+
+    assert smoke._image_default_admintools_conf() is None
+    assert any('Unable to authenticate with registry for Vertica image' in entry for entry in logs)
+    assert any('login failed' in entry for entry in logs)
 
 
 def test_synchronize_container_admintools_conf_success(tmp_path, monkeypatch):
