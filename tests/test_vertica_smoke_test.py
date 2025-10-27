@@ -157,6 +157,52 @@ def test_container_reports_eula_prompt(monkeypatch):
         smoke._EULA_PROMPT_LOG_CACHE.pop('vertica_ce', None)
 
 
+def test_detect_container_python_executable_prefers_known_path(monkeypatch):
+    commands: list[list[str]] = []
+
+    def fake_run(cmd, *, capture_output, text):
+        commands.append(cmd)
+
+        class Result:
+            returncode = 0
+            stdout = ''
+            stderr = ''
+
+        return Result()
+
+    monkeypatch.setattr(smoke, 'shutil', SimpleNamespace(which=lambda name: '/usr/bin/docker'))
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    python_path = smoke._detect_container_python_executable('vertica_ce')
+
+    assert python_path == '/opt/vertica/oss/python3/bin/python3'
+    assert commands[0][:5] == ['docker', 'exec', 'vertica_ce', 'test', '-x']
+
+
+def test_accept_vertica_eula_success(monkeypatch):
+    recorded: list[list[str]] = []
+
+    def fake_run(cmd, *, capture_output, text):
+        recorded.append(cmd)
+
+        class Result:
+            returncode = 0
+            stdout = 'accepted'
+            stderr = ''
+
+        return Result()
+
+    monkeypatch.setattr(smoke, 'shutil', SimpleNamespace(which=lambda name: '/usr/bin/docker'))
+    monkeypatch.setattr(smoke, '_detect_container_python_executable', lambda container: '/opt/vertica/python3')
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+    logs: list[str] = []
+    monkeypatch.setattr(smoke, 'log', logs.append)
+
+    assert smoke._accept_vertica_eula('vertica_ce') is True
+    assert recorded[-1][:4] == ['docker', 'exec', 'vertica_ce', '/opt/vertica/python3']
+    assert any('Recorded Vertica EULA acceptance' in message for message in logs)
+
+
 def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
     current_time = {'value': 0.0}
 
@@ -416,6 +462,7 @@ def test_ensure_vertica_recreates_on_eula_prompt(monkeypatch):
 
     compose_calls: list[bool] = []
     eula_checks: list[bool] = []
+    accept_calls: list[bool] = []
 
     def fake_compose_up(path: Path, force_recreate: bool = False) -> None:
         compose_calls.append(force_recreate)
@@ -439,6 +486,10 @@ def test_ensure_vertica_recreates_on_eula_prompt(monkeypatch):
         eula_checks.append(True)
         return observed
 
+    def fake_accept_eula(container: str) -> bool:
+        accept_calls.append(True)
+        return False
+
     monkeypatch.setattr(smoke, '_ensure_docker_compose_cli', lambda: None)
     monkeypatch.setattr(smoke, '_compose_file', lambda: Path('compose.yml'))
     monkeypatch.setattr(smoke, '_ensure_ecr_login_if_needed', lambda path: None)
@@ -448,6 +499,7 @@ def test_ensure_vertica_recreates_on_eula_prompt(monkeypatch):
     monkeypatch.setattr(smoke, '_docker_inspect', fake_docker_inspect)
     monkeypatch.setattr(smoke, '_container_is_responding', lambda: False)
     monkeypatch.setattr(smoke, '_container_reports_eula_prompt', fake_eula_prompt)
+    monkeypatch.setattr(smoke, '_accept_vertica_eula', fake_accept_eula)
     monkeypatch.setattr(smoke, '_log_container_tail', lambda container, tail=200: None)
     monkeypatch.setattr(smoke, '_log_health_log_entries', lambda container, count: count)
     monkeypatch.setattr(smoke, '_ensure_container_admintools_conf_readable', lambda container: False)
@@ -464,6 +516,66 @@ def test_ensure_vertica_recreates_on_eula_prompt(monkeypatch):
     # Only the first unhealthy observation should trigger the recreate
     assert len(compose_calls) == 1
     assert eula_checks == [True]
+    assert accept_calls == [True]
+
+
+def test_ensure_vertica_accepts_eula_without_recreate(monkeypatch):
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    def fake_sleep(seconds: float) -> None:
+        current_time['value'] += seconds
+
+    compose_calls: list[bool] = []
+    accept_calls: list[bool] = []
+
+    def fake_compose_up(path: Path, force_recreate: bool = False) -> None:
+        compose_calls.append(force_recreate)
+
+    health_states = iter(['unhealthy', 'healthy'])
+
+    def fake_docker_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return next(health_states)
+        if template == '{{.RestartCount}}':
+            return '0'
+        raise AssertionError(f'unexpected template: {template}')
+
+    def fake_eula_prompt(container: str) -> bool:
+        return not accept_calls
+
+    def fake_accept(container: str) -> bool:
+        accept_calls.append(True)
+        return True
+
+    monkeypatch.setattr(smoke, '_ensure_docker_compose_cli', lambda: None)
+    monkeypatch.setattr(smoke, '_compose_file', lambda: Path('compose.yml'))
+    monkeypatch.setattr(smoke, '_ensure_ecr_login_if_needed', lambda path: None)
+    monkeypatch.setattr(smoke, '_compose_up', fake_compose_up)
+    monkeypatch.setattr(smoke, '_sanitize_vertica_data_directories', lambda: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 5.0)
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_docker_inspect)
+    monkeypatch.setattr(smoke, '_container_is_responding', lambda: False)
+    monkeypatch.setattr(smoke, '_container_reports_eula_prompt', fake_eula_prompt)
+    monkeypatch.setattr(smoke, '_accept_vertica_eula', fake_accept)
+    monkeypatch.setattr(smoke, '_log_container_tail', lambda container, tail=200: None)
+    monkeypatch.setattr(smoke, '_log_health_log_entries', lambda container, count: count)
+    monkeypatch.setattr(smoke, '_ensure_container_admintools_conf_readable', lambda container: False)
+    monkeypatch.setattr(smoke, '_reset_vertica_data_directories', lambda: False)
+    monkeypatch.setattr(smoke, 'run_command', lambda command: None)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', fake_sleep)
+    monkeypatch.setattr(smoke, 'UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS', 30.0)
+
+    smoke.ensure_vertica_container_running(timeout=120.0, compose_timeout=0.0)
+
+    assert compose_calls == []
+    assert accept_calls == [True]
 
 
 def test_ensure_vertica_restarts_prolonged_starting(monkeypatch):
