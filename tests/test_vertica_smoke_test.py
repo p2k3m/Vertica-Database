@@ -205,6 +205,28 @@ def _compose_with_environment(tmp_path, content: str) -> Path:
     return compose
 
 
+def test_ensure_compose_accepts_eula_adds_block_when_missing(tmp_path):
+    compose = _compose_with_environment(
+        tmp_path,
+        textwrap.dedent(
+            '''
+            services:
+              vertica_ce:
+                image: vertica/vertica-ce:latest
+                restart: always
+            '''
+        ).lstrip(),
+    )
+
+    assert smoke._ensure_compose_accepts_eula(compose) is True
+
+    updated = compose.read_text().splitlines()
+
+    assert any('image: vertica/vertica-ce:latest' in line for line in updated)
+    assert any('restart: always' in line for line in updated)
+    assert any(line.strip().startswith('VERTICA_ACCEPT_EULA') for line in updated)
+
+
 def test_ensure_compose_accepts_eula_handles_inline_list(tmp_path):
     compose = _compose_with_environment(
         tmp_path,

@@ -3064,7 +3064,43 @@ def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
         index = block_end
 
     if not updated:
-        return False
+        # No ``environment`` block was found; synthesize one under the Vertica service
+        service_indent: Optional[str] = None
+        service_index: Optional[int] = None
+
+        for candidate_index, candidate_line in enumerate(lines):
+            stripped_candidate = candidate_line.strip()
+            if not stripped_candidate or stripped_candidate.startswith('#'):
+                continue
+            if stripped_candidate == 'vertica_ce:':
+                service_indent = candidate_line[: len(candidate_line) - len(candidate_line.lstrip())]
+                service_index = candidate_index + 1
+                break
+
+        if service_indent is None or service_index is None:
+            return False
+
+        insert_at = len(lines)
+        for candidate_index in range(service_index, len(lines)):
+            candidate_line = lines[candidate_index]
+            stripped_candidate = candidate_line.strip()
+            if not stripped_candidate:
+                continue
+            candidate_indent = candidate_line[: len(candidate_line) - len(candidate_line.lstrip())]
+            if len(candidate_indent) <= len(service_indent) and not stripped_candidate.startswith('#'):
+                insert_at = candidate_index
+                break
+
+        block_indent = service_indent + '  '
+        value_indent = block_indent + '  '
+
+        new_lines = [f'{block_indent}environment:'] + [
+            f'{value_indent}{key}: {_EULA_ENVIRONMENT_VARIABLES[key]}'
+            for key in _EULA_ENVIRONMENT_VARIABLES
+        ]
+
+        lines = lines[:insert_at] + new_lines + lines[insert_at:]
+        updated = True
 
     try:
         compose_file.write_text('\n'.join(lines) + '\n')
