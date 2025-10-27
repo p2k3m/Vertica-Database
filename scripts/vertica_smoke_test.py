@@ -1,3 +1,4 @@
+import ast
 import configparser
 import errno
 import grp
@@ -2828,6 +2829,148 @@ _COMPOSE_FILE_CANDIDATES = [
 ]
 
 
+def _strip_inline_comment(text: str) -> str:
+    """Return ``text`` without any trailing YAML-style comment."""
+
+    in_single = False
+    in_double = False
+
+    for index, char in enumerate(text):
+        if char == "'" and not in_double:
+            in_single = not in_single
+            continue
+        if char == '"' and not in_single:
+            in_double = not in_double
+            continue
+        if char == '#' and not in_single and not in_double:
+            return text[:index].rstrip()
+
+    return text.rstrip()
+
+
+def _parse_inline_environment_list(payload: str) -> Optional[list[str]]:
+    """Parse an inline YAML list used for ``environment`` entries."""
+
+    payload = payload.strip()
+    if not payload:
+        return []
+
+    literal = f'[{payload}]'
+    try:
+        parsed = ast.literal_eval(literal)
+    except (SyntaxError, ValueError):
+        items = []
+        for part in payload.split(','):
+            item = part.strip()
+            if not item:
+                continue
+            if (item.startswith('"') and item.endswith('"')) or (
+                item.startswith("'") and item.endswith("'")
+            ):
+                item = item[1:-1]
+            items.append(item)
+        return items
+
+    if isinstance(parsed, list):
+        return [str(element) if not isinstance(element, str) else element for element in parsed]
+
+    return None
+
+
+def _parse_inline_environment_mapping(payload: str) -> Optional[dict[str, str]]:
+    """Parse an inline YAML mapping used for ``environment`` entries."""
+
+    payload = payload.strip()
+    if not payload:
+        return {}
+
+    literal = f'{{{payload}}}'
+    try:
+        parsed = ast.literal_eval(literal)
+    except (SyntaxError, ValueError):
+        entries: dict[str, str] = {}
+        for part in payload.split(','):
+            if not part.strip():
+                continue
+            key, sep, value = part.partition(':')
+            if not sep:
+                return None
+            key = key.strip()
+            value = value.strip()
+            if (key.startswith('"') and key.endswith('"')) or (
+                key.startswith("'") and key.endswith("'")
+            ):
+                key = key[1:-1]
+            if (value.startswith('"') and value.endswith('"')) or (
+                value.startswith("'") and value.endswith("'")
+            ):
+                value = value[1:-1]
+            entries[key] = value
+        return entries
+
+    if isinstance(parsed, dict):
+        return {
+            str(key): '' if value is None else str(value)
+            for key, value in parsed.items()
+        }
+
+    return None
+
+
+def _convert_inline_environment(
+    remainder: str, value_indent: str
+) -> Optional[tuple[str, list[str]]]:
+    """Return the normalized lines for an inline ``environment`` block."""
+
+    remainder = _strip_inline_comment(remainder)
+
+    if remainder == '{}':
+        return 'mapping', []
+    if remainder == '[]':
+        return 'list', []
+
+    if remainder.startswith('[') and remainder.endswith(']'):
+        items = _parse_inline_environment_list(remainder[1:-1])
+        if items is None:
+            return None
+        return 'list', [f"{value_indent}- {item}" for item in items]
+
+    if remainder.startswith('{') and remainder.endswith('}'):
+        mapping = _parse_inline_environment_mapping(remainder[1:-1])
+        if mapping is None:
+            return None
+        return (
+            'mapping',
+            [
+                f"{value_indent}{key}: {value}"
+                for key, value in mapping.items()
+            ],
+        )
+
+    try:
+        import yaml  # type: ignore
+    except Exception:  # pragma: no cover - yaml is optional
+        yaml = None  # type: ignore
+
+    if yaml is not None:
+        try:
+            parsed = yaml.safe_load(remainder)
+        except Exception:  # pragma: no cover - unsafe content
+            parsed = None
+        if isinstance(parsed, list):
+            return 'list', [f"{value_indent}- {str(item)}" for item in parsed]
+        if isinstance(parsed, dict):
+            return (
+                'mapping',
+                [
+                    f"{value_indent}{str(key)}: {'' if value is None else str(value)}"
+                    for key, value in parsed.items()
+                ],
+            )
+
+    return None
+
+
 def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
     """Ensure ``compose_file`` sets the environment variables for EULA acceptance."""
 
@@ -2855,15 +2998,13 @@ def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
         remainder = stripped[len('environment:') :].strip()
         inline_mode: Optional[str] = None
         if remainder:
-            if remainder == '{}':
-                inline_mode = 'mapping'
-                lines[index] = f'{indent}environment:'
-            elif remainder == '[]':
-                inline_mode = 'list'
-                lines[index] = f'{indent}environment:'
-            else:
+            conversion = _convert_inline_environment(remainder, value_indent)
+            if conversion is None:
                 index += 1
                 continue
+            inline_mode, new_lines = conversion
+            lines[index] = f'{indent}environment:'
+            lines = lines[: index + 1] + new_lines + lines[index + 1 :]
 
         block_start = index + 1
         block_end = block_start
