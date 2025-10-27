@@ -1,9 +1,10 @@
 import importlib
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Optional
-from pathlib import Path
 import subprocess
+import textwrap
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Optional
 from types import SimpleNamespace
 
 import pytest
@@ -197,6 +198,53 @@ def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
 
     assert not calls
 
+
+def _compose_with_environment(tmp_path, content: str) -> Path:
+    compose = tmp_path / 'compose.yml'
+    compose.write_text(content)
+    return compose
+
+
+def test_ensure_compose_accepts_eula_handles_inline_list(tmp_path):
+    compose = _compose_with_environment(
+        tmp_path,
+        textwrap.dedent(
+            '''
+            services:
+              vertica_ce:
+                environment: [FOO=bar, BAR=baz]
+            '''
+        ).lstrip(),
+    )
+
+    assert smoke._ensure_compose_accepts_eula(compose) is True
+
+    updated = compose.read_text().splitlines()
+
+    assert any('FOO=bar' in line for line in updated)
+    assert any('BAR=baz' in line for line in updated)
+    assert any('VERTICA_ACCEPT_EULA' in line for line in updated)
+
+
+def test_ensure_compose_accepts_eula_handles_inline_mapping(tmp_path):
+    compose = _compose_with_environment(
+        tmp_path,
+        textwrap.dedent(
+            '''
+            services:
+              vertica_ce:
+                environment: {FOO: bar, BAR: baz}
+            '''
+        ).lstrip(),
+    )
+
+    assert smoke._ensure_compose_accepts_eula(compose) is True
+
+    updated = compose.read_text().splitlines()
+
+    assert any('FOO: bar' in line for line in updated)
+    assert any('BAR: baz' in line for line in updated)
+    assert any('VERTICA_ACCEPT_EULA' in line for line in updated)
 
 def test_ensure_vertica_respects_starting_grace(monkeypatch):
     current_time = {'value': 0.0}
