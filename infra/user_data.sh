@@ -291,11 +291,10 @@ while [ $SECONDS -lt $ownership_deadline ]; do
     continue
   fi
 
-  if ! docker exec vertica_ce test -e /opt/vertica/config/admintools.conf 2>/dev/null; then
-    sleep 5
-    continue
-  fi
-
+  # Vertica 24.3+ defers creating ``admintools.conf`` until after ownership is aligned
+  # which can deadlock with our previous guard that waited for the file before running
+  # ``chown``.  Skip the existence check so that we always relax the directory
+  # permissions once the container exposes the ``dbadmin`` account.
   if ! docker exec --user root vertica_ce getent passwd dbadmin >/dev/null 2>&1; then
     echo "[user-data] Container dbadmin account not available yet; retrying"
     sleep 5
