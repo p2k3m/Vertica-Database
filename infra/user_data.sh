@@ -234,6 +234,15 @@ for base_path in /var/lib/vertica /data/vertica; do
     normalized="$(readlink -m "$admintools_conf" 2>/dev/null || true)"
 
     remove_symlink=false
+
+    # ``stat`` fails for recursive symlinks (``Too many levels of symbolic
+    # links``) as well as dangling entries whose targets were deleted inside the
+    # container.  Remove these so Vertica can rebuild a regular
+    # ``admintools.conf`` on the next startup attempt.
+    if ! stat "$admintools_conf" >/dev/null 2>&1; then
+      remove_symlink=true
+    fi
+
     if [ -n "$target" ]; then
       case "$target" in
         /opt/vertica/config/*|opt/vertica/config/*|../opt/vertica/config/*|*/../opt/vertica/config/*)
@@ -247,6 +256,14 @@ for base_path in /var/lib/vertica /data/vertica; do
 
     if [ "$resolved" = "/opt/vertica/config/admintools.conf" ] || \
        [ "$normalized" = "/opt/vertica/config/admintools.conf" ]; then
+      remove_symlink=true
+    fi
+
+    # ``readlink -m`` returns an empty string for recursive symlinks on some
+    # distributions.  Treat this the same as a missing target so Vertica can
+    # rebuild the configuration file instead of looping on the bootstrap
+    # symlink.
+    if [ -z "$normalized" ]; then
       remove_symlink=true
     fi
 
