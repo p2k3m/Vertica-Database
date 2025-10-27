@@ -154,6 +154,11 @@ _CONFIG_COPY_SAME_FILE_PATTERNS: tuple[str, ...] = (
 )
 _CONFIG_COPY_SAME_FILE_LOG_CACHE: dict[str, tuple[float, bool]] = {}
 _CONFIG_COPY_SAME_FILE_LOG_TTL_SECONDS = 30.0
+# Track the last recovery attempt for each Vertica configuration directory so we
+# can retry if the container continues to report identical source/destination
+# paths while avoiding rapid-fire deletions when the copy succeeds.
+_VERTICA_CONFIG_SAME_FILE_RECOVERED: dict[Path, float] = {}
+_VERTICA_CONFIG_SAME_FILE_RECOVERY_RETRY_SECONDS = 180.0
 
 # Track when ``admintools.conf`` was first observed missing for each Vertica
 # data directory.  Some bootstrap failures repeatedly start the container and
@@ -178,7 +183,6 @@ _ADMINTOOLS_CONF_SEEDED_AT: dict[Path, float] = {}
 _VERTICA_CONTAINER_RESTART_THROTTLE_SECONDS = 60.0
 _LAST_VERTICA_CONTAINER_RESTART: Optional[float] = None
 _OBSERVED_VERTICA_CONFIG_DIRECTORIES: set[Path] = set()
-_VERTICA_CONFIG_SAME_FILE_RECOVERED: set[Path] = set()
 
 
 def _is_within_vertica_data_directories(candidate: Path) -> bool:
@@ -578,8 +582,29 @@ def _sanitize_vertica_data_directories() -> None:
 
             config_path = vertica_root / 'config'
 
-            if same_file_issue_detected and config_path not in _VERTICA_CONFIG_SAME_FILE_RECOVERED:
-                if config_path.exists() or config_path.is_symlink():
+            now = time.time()
+
+            try:
+                config_exists = config_path.exists()
+            except OSError:
+                config_exists = False
+
+            try:
+                config_is_symlink = config_path.is_symlink()
+            except OSError:
+                config_is_symlink = False
+
+            if not config_exists and not config_is_symlink:
+                _VERTICA_CONFIG_SAME_FILE_RECOVERED.pop(config_path, None)
+
+            last_same_file_recovery = _VERTICA_CONFIG_SAME_FILE_RECOVERED.get(config_path)
+            allow_same_file_recovery = True
+            if last_same_file_recovery is not None:
+                if now - last_same_file_recovery < _VERTICA_CONFIG_SAME_FILE_RECOVERY_RETRY_SECONDS:
+                    allow_same_file_recovery = False
+
+            if same_file_issue_detected and allow_same_file_recovery:
+                if config_exists or config_is_symlink:
                     log(
                         'Detected identical Vertica configuration source and '
                         f'destination paths; rebuilding persisted configuration at {config_path}'
@@ -591,7 +616,7 @@ def _sanitize_vertica_data_directories() -> None:
                     except OSError as exc:
                         log(f'Unable to remove {config_path}: {exc}')
                     else:
-                        _VERTICA_CONFIG_SAME_FILE_RECOVERED.add(config_path)
+                        _VERTICA_CONFIG_SAME_FILE_RECOVERED[config_path] = now
                         _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
                         _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
                         _OBSERVED_VERTICA_CONFIG_DIRECTORIES.discard(config_path)
@@ -644,7 +669,7 @@ def _sanitize_vertica_data_directories() -> None:
 
             config_exists = config_path.exists() and config_path.is_dir()
             config_observed = config_path in _OBSERVED_VERTICA_CONFIG_DIRECTORIES
-            current_time = time.time()
+            current_time = now
 
             if not config_exists:
                 if config_observed:
