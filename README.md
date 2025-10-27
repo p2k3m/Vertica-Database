@@ -131,11 +131,13 @@ The `tests/` directory contains a simple connectivity test (`SELECT 1` + table l
 ## Automated pipeline self-healing
 
 The `scripts/auto_pipeline_fix.py` helper coordinates a closed-loop remediation
-flow when a workflow on `main` fails. It automatically gathers the failing log
-excerpts, requests a unified diff from an LLM, pushes the fix to a new branch,
-opens a pull request, enables auto-merge, and monitors the checks. If the checks
-fail again the process repeats with the fresh failure details until either the
-checks pass or the iteration budget is exhausted.
+flow when a workflow fails. It automatically gathers the failing log excerpts,
+requests a unified diff from an LLM, pushes the fix to a new branch, opens a
+pull request, enables auto-merge, and monitors the checks. The fixer now
+prioritises failing pull-request runs (falling back to `main` branch failures)
+so that regressions introduced on feature branches can be healed before merging.
+If the checks fail again the process repeats with the fresh failure details
+until either the checks pass or the iteration budget is exhausted.
 
 ### Required environment
 
