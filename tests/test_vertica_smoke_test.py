@@ -23,7 +23,7 @@ def _disable_container_restart(monkeypatch):
 @pytest.fixture(autouse=True)
 def _reset_same_file_state(monkeypatch):
     monkeypatch.setattr(smoke, '_CONFIG_COPY_SAME_FILE_LOG_CACHE', {})
-    monkeypatch.setattr(smoke, '_VERTICA_CONFIG_SAME_FILE_RECOVERED', set())
+    monkeypatch.setattr(smoke, '_VERTICA_CONFIG_SAME_FILE_RECOVERED', {})
 
 
 @pytest.fixture(autouse=True)
@@ -547,7 +547,7 @@ def test_sanitize_rebuilds_config_after_same_file_logs(monkeypatch, tmp_path):
 
     assert not config_path.exists()
     assert base_path.exists()
-    assert smoke._VERTICA_CONFIG_SAME_FILE_RECOVERED == {config_path}
+    assert set(smoke._VERTICA_CONFIG_SAME_FILE_RECOVERED) == {config_path}
     assert restart_requests == [('vertica_ce', 'recover configuration copy failure')]
     assert any('identical Vertica configuration source' in entry for entry in logs)
 
