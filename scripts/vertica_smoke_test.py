@@ -751,10 +751,20 @@ def _sanitize_vertica_data_directories() -> None:
             else:
                 config_observed = config_path in _OBSERVED_VERTICA_CONFIG_DIRECTORIES
                 if not config_observed:
-                    _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+                    # Remember when we first noticed the configuration directory
+                    # was missing so the grace-period timers can elapse.  The
+                    # previous implementation cleared the timestamp on every
+                    # pass which meant the recovery logic never accumulated
+                    # enough time to trigger.  This left environments stuck in
+                    # a bootstrap loop waiting for Vertica to populate
+                    # ``admintools.conf`` while repeatedly resetting the
+                    # observation window.
+                    _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.setdefault(
+                        config_path, time.time()
+                    )
                     _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
                     log(
-                        'Detected missing admintools.conf but Vertica ' 
+                        'Detected missing admintools.conf but Vertica '
                         'configuration directory has not been observed yet; '
                         'allowing the container to complete its initial '
                         'bootstrap before seeding defaults'
