@@ -162,6 +162,48 @@ def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
     assert not calls
 
 
+def test_ensure_vertica_respects_starting_grace(monkeypatch):
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    def fake_sleep(seconds: float) -> None:
+        current_time['value'] += seconds
+
+    calls: list[list[str]] = []
+
+    def fake_run_command(command: list[str]):  # pragma: no cover - should not run
+        calls.append(command)
+        raise AssertionError('run_command should not be invoked during grace period')
+
+    health_states = iter(['starting', 'healthy'])
+
+    def fake_docker_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            try:
+                return next(health_states)
+            except StopIteration:
+                return 'healthy'
+        if template == '{{.RestartCount}}':
+            return '0'
+        raise AssertionError(f'Unexpected template: {template}')
+
+    monkeypatch.setattr(smoke, '_ensure_docker_compose_cli', lambda: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 600.0)
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_docker_inspect)
+    monkeypatch.setattr(smoke, 'run_command', fake_run_command)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', fake_sleep)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+
+    smoke.ensure_vertica_container_running(timeout=30.0, compose_timeout=0.0)
+
+    assert not calls
+
+
 def test_ensure_vertica_resets_data_directories(monkeypatch):
     current_time = {'value': 0.0}
 
@@ -207,12 +249,64 @@ def test_ensure_vertica_resets_data_directories(monkeypatch):
     monkeypatch.setattr(smoke, 'log', lambda message: None)
     monkeypatch.setattr(smoke.time, 'time', fake_time)
     monkeypatch.setattr(smoke.time, 'sleep', fake_sleep)
-    monkeypatch.setattr(smoke, 'UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS', 15.0)
+    monkeypatch.setattr(smoke, 'UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS', 5.0)
 
     smoke.ensure_vertica_container_running(timeout=1000.0, compose_timeout=0.0)
 
     assert compose_calls == [True, True, True]
     assert reset_calls == [True]
+
+
+def test_ensure_vertica_restarts_prolonged_starting(monkeypatch):
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    def fake_sleep(seconds: float) -> None:
+        current_time['value'] += seconds
+
+    restart_commands: list[list[str]] = []
+
+    def fake_run_command(command: list[str]) -> None:
+        if command[:3] == ['docker', 'restart', 'vertica_ce']:
+            restart_commands.append(command)
+            return
+        if command[:3] == ['docker', 'ps', '--filter']:
+            return
+        if command[:3] == ['docker', 'logs', '--tail']:
+            return
+        raise AssertionError(f'Unexpected command: {command}')
+
+    def fake_docker_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return 'starting'
+        if template == '{{.RestartCount}}':
+            return '0'
+        raise AssertionError(f'Unexpected template: {template}')
+
+    monkeypatch.setattr(smoke, '_ensure_docker_compose_cli', lambda: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 100.0)
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_docker_inspect)
+    monkeypatch.setattr(smoke, '_container_is_responding', lambda: False)
+    monkeypatch.setattr(smoke, '_sanitize_vertica_data_directories', lambda: None)
+    monkeypatch.setattr(smoke, '_log_container_tail', lambda container, tail=200: None)
+    monkeypatch.setattr(smoke, '_log_health_log_entries', lambda container, count: count)
+    monkeypatch.setattr(smoke, '_compose_file', lambda: None)
+    monkeypatch.setattr(smoke, '_reset_vertica_data_directories', lambda: False)
+    monkeypatch.setattr(smoke, 'run_command', fake_run_command)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', fake_sleep)
+    monkeypatch.setattr(smoke, 'UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS', 5.0)
+
+    with pytest.raises(SystemExit) as excinfo:
+        smoke.ensure_vertica_container_running(timeout=90.0, compose_timeout=0.0)
+
+    assert 'stuck in starting state' in str(excinfo.value)
+    assert restart_commands  # restarts should have been attempted
 
 
 def test_sanitize_retains_missing_observation_until_container_confirms(monkeypatch, tmp_path):
