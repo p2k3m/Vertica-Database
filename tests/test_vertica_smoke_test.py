@@ -1083,7 +1083,7 @@ def test_synchronize_container_admintools_conf_success(tmp_path, monkeypatch):
 
     def fake_run(args, capture_output=True, text=True, **kwargs):
         if args[:3] == ['docker', 'exec', '--user']:
-            assert args[3] == '0'
+            assert args[3] in {'0', 'dbadmin'}
             assert args[4] == 'vertica_ce'
             command = args[5:]
             if command == ['rm', '-f', '/opt/vertica/config/admintools.conf']:
@@ -1118,18 +1118,18 @@ def test_synchronize_container_admintools_conf_recovers_non_directory_parent(tmp
     monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: True)
     monkeypatch.setattr(smoke, '_container_dbadmin_identity', lambda container: (1000, 1000))
 
-    mkdir_attempts: list[int] = []
+    mkdir_attempts: list[str] = []
 
     def fake_run(args, capture_output=True, text=True, **kwargs):
         if args[:3] == ['docker', 'exec', '--user']:
-            assert args[3] == '0'
+            assert args[3] in {'0', 'dbadmin'}
             assert args[4] == 'vertica_ce'
             command = args[5:]
             if command == ['rm', '-f', '/opt/vertica/config/admintools.conf']:
                 return subprocess.CompletedProcess(args, 0, '', '')
             if command == ['mkdir', '-p', '/opt/vertica/config']:
-                mkdir_attempts.append(1)
-                if len(mkdir_attempts) == 1:
+                mkdir_attempts.append(args[3])
+                if len(mkdir_attempts) < 3:
                     return subprocess.CompletedProcess(
                         args,
                         1,
@@ -1143,6 +1143,7 @@ def test_synchronize_container_admintools_conf_recovers_non_directory_parent(tmp
                 return subprocess.CompletedProcess(args, 0, '0:0', '')
             if command == ['sh', '-c', 'chown 1000:1000 /opt/vertica/config/admintools.conf']:
                 return subprocess.CompletedProcess(args, 0, '', '')
+            raise AssertionError(args)
         if args[:2] == ['docker', 'cp']:
             assert args[2].endswith('admintools.conf')
             assert args[3] == 'vertica_ce:/opt/vertica/config/admintools.conf'

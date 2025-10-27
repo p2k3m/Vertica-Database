@@ -183,6 +183,7 @@ _ADMINTOOLS_CONF_SEEDED_AT: dict[Path, float] = {}
 _VERTICA_CONTAINER_RESTART_THROTTLE_SECONDS = 60.0
 _LAST_VERTICA_CONTAINER_RESTART: Optional[float] = None
 _OBSERVED_VERTICA_CONFIG_DIRECTORIES: set[Path] = set()
+_CONTAINER_EXEC_USER_CACHE: dict[str, str] = {}
 
 
 def _is_within_vertica_data_directories(candidate: Path) -> bool:
@@ -1484,6 +1485,64 @@ def _container_dbadmin_identity(container: str) -> Optional[tuple[int, int]]:
         return None
 
 
+def _preferred_container_admin_user(container: str) -> str:
+    """Return the preferred ``docker exec`` user for Vertica admin operations."""
+
+    cached_user = _CONTAINER_EXEC_USER_CACHE.get(container)
+    if cached_user:
+        return cached_user
+
+    identity = _container_dbadmin_identity(container)
+    user = 'dbadmin' if identity is not None else '0'
+    _CONTAINER_EXEC_USER_CACHE[container] = user
+    return user
+
+
+def _docker_exec_prefer_container_admin(
+    container: str,
+    command: list[str],
+    missing_cli_message: str,
+    *,
+    allow_root_fallback: bool = True,
+) -> Optional[subprocess.CompletedProcess[str]]:
+    """Run ``command`` inside ``container`` preferring the Vertica admin user."""
+
+    preferred_user = _preferred_container_admin_user(container)
+    users_to_try: list[str] = [preferred_user]
+    if allow_root_fallback and preferred_user != '0':
+        users_to_try.append('0')
+
+    last_result: Optional[subprocess.CompletedProcess[str]] = None
+
+    for index, user in enumerate(users_to_try):
+        try:
+            result = subprocess.run(
+                ['docker', 'exec', '--user', user, container, *command],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            log(missing_cli_message)
+            return None
+
+        if result.stdout:
+            log(result.stdout.rstrip())
+        if result.stderr:
+            log(f'[stderr] {result.stderr.rstrip()}')
+
+        last_result = result
+
+        if result.returncode == 0 or index == len(users_to_try) - 1:
+            return result
+
+        log(
+            'Container command failed with exit code '
+            f"{result.returncode} when run as {user}; retrying as {users_to_try[index + 1]}"
+        )
+
+    return last_result
+
+
 def _align_container_path_identity(container: str, path: str, friendly_name: str) -> tuple[bool, bool]:
     """Attempt to align ``path`` ownership with ``dbadmin`` inside ``container``.
 
@@ -1730,29 +1789,13 @@ def _write_container_admintools_conf(container: str, target: str, content: str) 
         ]
     )
 
-    try:
-        result = subprocess.run(
-            [
-                'docker',
-                'exec',
-                '--user',
-                '0',
-                container,
-                'sh',
-                '-c',
-                script,
-            ],
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError:
-        log('Docker CLI is not available while writing admintools.conf inside container')
+    result = _docker_exec_prefer_container_admin(
+        container,
+        ['sh', '-c', script],
+        'Docker CLI is not available while writing admintools.conf inside container',
+    )
+    if result is None:
         return False
-
-    if result.stdout:
-        log(result.stdout.rstrip())
-    if result.stderr:
-        log(f'[stderr] {result.stderr.rstrip()}')
 
     if result.returncode != 0:
         log('Failed to write admintools.conf inside container using exec fallback')
@@ -1838,29 +1881,13 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
             for container_target in targets:
                 container_parent = os.path.dirname(container_target) or '/'
 
-                try:
-                    remove_result = subprocess.run(
-                        [
-                            'docker',
-                            'exec',
-                            '--user',
-                            '0',
-                            container,
-                            'rm',
-                            '-f',
-                            container_target,
-                        ],
-                        capture_output=True,
-                        text=True,
-                    )
-                except FileNotFoundError:
-                    log('Docker CLI is not available while removing admintools.conf inside container before synchronization')
+                remove_result = _docker_exec_prefer_container_admin(
+                    container,
+                    ['rm', '-f', container_target],
+                    'Docker CLI is not available while removing admintools.conf inside container before synchronization',
+                )
+                if remove_result is None:
                     return False
-
-                if remove_result.stdout:
-                    log(remove_result.stdout.rstrip())
-                if remove_result.stderr:
-                    log(f'[stderr] {remove_result.stderr.rstrip()}')
 
                 if remove_result.returncode != 0:
                     log(
@@ -1868,23 +1895,12 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
                         'attempting to continue'
                     )
 
-                try:
-                    mkdir_result = subprocess.run(
-                        [
-                            'docker',
-                            'exec',
-                            '--user',
-                            '0',
-                            container,
-                            'mkdir',
-                            '-p',
-                            container_parent,
-                        ],
-                        capture_output=True,
-                        text=True,
-                    )
-                except FileNotFoundError:
-                    log('Docker CLI is not available while preparing admintools.conf directory inside container')
+                mkdir_result = _docker_exec_prefer_container_admin(
+                    container,
+                    ['mkdir', '-p', container_parent],
+                    'Docker CLI is not available while preparing admintools.conf directory inside container',
+                )
+                if mkdir_result is None:
                     return False
 
                 if mkdir_result.returncode != 0:
@@ -1901,68 +1917,30 @@ def _synchronize_container_admintools_conf(container: str, source: Path) -> bool
                             'Detected non-directory entry for admintools.conf parent inside container; '
                             'attempting to rebuild directory'
                         )
-                        try:
-                            remove_result = subprocess.run(
-                                [
-                                    'docker',
-                                    'exec',
-                                    '--user',
-                                    '0',
-                                    container,
-                                    'rm',
-                                    '-rf',
-                                    container_parent,
-                                ],
-                                capture_output=True,
-                                text=True,
-                            )
-                        except FileNotFoundError:
-                            log(
-                                'Docker CLI is not available while removing existing admintools.conf parent '
-                                'inside container'
-                            )
-                            remove_result = None
+                        remove_result = _docker_exec_prefer_container_admin(
+                            container,
+                            ['rm', '-rf', container_parent],
+                            'Docker CLI is not available while removing existing admintools.conf parent inside container',
+                        )
+                        if remove_result is None:
+                            return False
 
-                        if remove_result is not None:
-                            if remove_result.stdout:
-                                log(remove_result.stdout.rstrip())
-                            if remove_result.stderr:
-                                log(f'[stderr] {remove_result.stderr.rstrip()}')
+                        if remove_result.returncode == 0:
+                            mkdir_retry = _docker_exec_prefer_container_admin(
+                                container,
+                                ['mkdir', '-p', container_parent],
+                                'Docker CLI is not available while preparing admintools.conf directory inside container',
+                            )
+                            if mkdir_retry is None:
+                                return False
 
-                            if remove_result.returncode == 0:
-                                try:
-                                    mkdir_retry = subprocess.run(
-                                        [
-                                            'docker',
-                                            'exec',
-                                            '--user',
-                                            '0',
-                                            container,
-                                            'mkdir',
-                                            '-p',
-                                            container_parent,
-                                        ],
-                                        capture_output=True,
-                                        text=True,
-                                    )
-                                except FileNotFoundError:
-                                    mkdir_retry = None
-                                    log(
-                                        'Docker CLI is not available while preparing admintools.conf '
-                                        'directory inside container'
-                                    )
-                                else:
-                                    retried_mkdir = True
-                                    if mkdir_retry.stdout:
-                                        log(mkdir_retry.stdout.rstrip())
-                                    if mkdir_retry.stderr:
-                                        log(f'[stderr] {mkdir_retry.stderr.rstrip()}')
-                                    if mkdir_retry.returncode == 0:
-                                        log(
-                                            'Rebuilt admintools.conf directory inside container after removing '
-                                            'conflicting entry'
-                                        )
-                                        mkdir_result = mkdir_retry
+                            retried_mkdir = True
+                            if mkdir_retry.returncode == 0:
+                                log(
+                                    'Rebuilt admintools.conf directory inside container after removing '
+                                    'conflicting entry'
+                                )
+                                mkdir_result = mkdir_retry
 
                     if mkdir_result.returncode != 0:
                         if not retried_mkdir:
