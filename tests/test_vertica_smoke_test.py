@@ -631,7 +631,13 @@ def test_sanitize_rebuilds_config_after_same_file_logs(monkeypatch, tmp_path):
     monkeypatch.setattr(smoke, '_docker_inspect', lambda container, template: 'running')
     monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 1000.0)
     monkeypatch.setattr(smoke, '_container_restart_count', lambda container: 0)
-    monkeypatch.setattr(smoke, '_seed_default_admintools_conf', lambda config_dir: (True, False))
+    seed_calls: list[Path] = []
+
+    def fake_seed(config_dir: Path) -> tuple[bool, bool]:
+        seed_calls.append(config_dir)
+        return True, False
+
+    monkeypatch.setattr(smoke, '_seed_default_admintools_conf', fake_seed)
     monkeypatch.setattr(smoke, '_synchronize_container_admintools_conf', lambda container, source: False)
     monkeypatch.setattr(smoke, '_container_path_exists', lambda container, path: False)
     monkeypatch.setattr(smoke, '_container_reports_config_same_file_issue', lambda container: True)
@@ -642,10 +648,11 @@ def test_sanitize_rebuilds_config_after_same_file_logs(monkeypatch, tmp_path):
 
     smoke._sanitize_vertica_data_directories()
 
-    assert not config_path.exists()
+    assert config_path.exists()
     assert base_path.exists()
     assert set(smoke._VERTICA_CONFIG_SAME_FILE_RECOVERED) == {config_path}
-    assert restart_requests == [('vertica_ce', 'recover configuration copy failure')]
+    assert restart_requests == [('vertica_ce', 'apply recovered configuration defaults')]
+    assert seed_calls == [config_path]
     assert any('identical Vertica configuration source' in entry for entry in logs)
 
 

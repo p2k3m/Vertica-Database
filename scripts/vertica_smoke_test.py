@@ -629,25 +629,50 @@ def _sanitize_vertica_data_directories() -> None:
                 if config_exists or config_is_symlink:
                     log(
                         'Detected identical Vertica configuration source and '
-                        f'destination paths; rebuilding persisted configuration at {config_path}'
+                        f'destination paths; ensuring persisted configuration at {config_path} contains defaults'
                     )
-                    try:
-                        shutil.rmtree(config_path)
-                    except FileNotFoundError:
-                        pass
-                    except OSError as exc:
-                        log(f'Unable to remove {config_path}: {exc}')
-                    else:
-                        _VERTICA_CONFIG_SAME_FILE_RECOVERED[config_path] = now
-                        _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
-                        _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
-                        _OBSERVED_VERTICA_CONFIG_DIRECTORIES.discard(config_path)
-                        if not _ensure_directory(vertica_root):
+
+                    if config_is_symlink:
+                        try:
+                            config_path.unlink()
+                        except OSError as exc:
+                            log(f'Unable to remove symlinked {config_path}: {exc}')
                             continue
-                        _restart_vertica_container(
-                            'vertica_ce', 'recover configuration copy failure'
-                        )
+
+                    try:
+                        if config_path.exists() and not config_path.is_dir():
+                            config_path.unlink()
+                    except OSError as exc:
+                        log(f'Unable to remove unexpected entry at {config_path}: {exc}')
                         continue
+
+                    if not _ensure_directory(config_path):
+                        continue
+
+                    _OBSERVED_VERTICA_CONFIG_DIRECTORIES.add(config_path)
+                    _ensure_known_identity_tree(config_path, max_depth=2)
+
+                    admintools_conf = config_path / 'admintools.conf'
+                    seed_success, _ = _seed_default_admintools_conf(config_path)
+                    if seed_success:
+                        _ADMINTOOLS_CONF_SEEDED_AT[config_path] = now
+                        _ADMINTOOLS_CONF_MISSING_OBSERVED_AT.pop(config_path, None)
+                        _ensure_known_identity_tree(config_path, max_depth=2)
+                        _synchronize_container_admintools_conf(
+                            'vertica_ce', admintools_conf
+                        )
+                    else:
+                        log(
+                            'Failed to seed default admintools.conf while recovering identical configuration paths; '
+                            'deferring retry'
+                        )
+                        _ADMINTOOLS_CONF_SEEDED_AT.pop(config_path, None)
+
+                    _VERTICA_CONFIG_SAME_FILE_RECOVERED[config_path] = now
+                    _restart_vertica_container(
+                        'vertica_ce', 'apply recovered configuration defaults'
+                    )
+                    continue
 
             if config_path.is_symlink():
                 try:
