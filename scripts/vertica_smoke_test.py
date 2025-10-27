@@ -67,9 +67,15 @@ ADMINTOOLS_CONF_MISSING_RESTART_THRESHOLD = 2
 # Normalise the values here so the automation remains compatible with both
 # behaviours.
 _EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
+    'VERTICA_ACCEPT_EULA': 'ACCEPT',
+    'VERTICA_EULA': 'ACCEPT',
+    'VERTICA_EULA_ACCEPTANCE': 'ACCEPT',
     'VERTICA_EULA_ACCEPTED': '1',
     'VERTICA_DB_EULA': 'ACCEPT',
     'VERTICA_DB_EULA_ACCEPTED': '1',
+    'VERTICA_LICENSE': 'ACCEPT',
+    'VERTICA_LICENSE_ACCEPTED': '1',
+    'VERTICA_LICENSE_STATUS': 'ACCEPT',
     # Newer Vertica container images ship an updated web-based Management Console
     # agent that enforces its own EULA prompt during startup.  The agent shares
     # the same container as the database which means that an unanswered prompt
@@ -77,9 +83,11 @@ _EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
     # repeatedly attempts to display the license text and exits).  Accept the
     # additional agreements up-front so the container can progress to a healthy
     # state without requiring interactive acknowledgement.
-    'VERTICA_EULA': 'ACCEPT',
+    'VERTICA_MC_ACCEPT_EULA': 'ACCEPT',
     'VERTICA_MC_EULA': 'ACCEPT',
     'VERTICA_MC_EULA_ACCEPTED': '1',
+    'VERTICA_MC_LICENSE': 'ACCEPT',
+    'VERTICA_MC_LICENSE_ACCEPTED': '1',
 }
 
 
@@ -159,6 +167,14 @@ _CONFIG_COPY_SAME_FILE_LOG_TTL_SECONDS = 30.0
 # paths while avoiding rapid-fire deletions when the copy succeeds.
 _VERTICA_CONFIG_SAME_FILE_RECOVERED: dict[Path, float] = {}
 _VERTICA_CONFIG_SAME_FILE_RECOVERY_RETRY_SECONDS = 180.0
+# Detect repeated Vertica license prompts so the smoke test can inject the
+# acceptance environment variables and recreate the container automatically when
+# new image versions introduce additional checks.
+_EULA_PROMPT_LOG_PATTERNS: tuple[str, ...] = (
+    "Output is not a tty --- can't reliably display EULA",
+)
+_EULA_PROMPT_LOG_CACHE: dict[str, tuple[float, bool]] = {}
+_EULA_PROMPT_LOG_TTL_SECONDS = 30.0
 
 # Track when ``admintools.conf`` was first observed missing for each Vertica
 # data directory.  Some bootstrap failures repeatedly start the container and
@@ -2393,6 +2409,41 @@ def _container_reports_config_same_file_issue(container: str) -> bool:
     return detected
 
 
+def _container_reports_eula_prompt(container: str) -> bool:
+    """Return ``True`` when Vertica logs show an unattended EULA prompt."""
+
+    now = time.time()
+    cached = _EULA_PROMPT_LOG_CACHE.get(container)
+    if cached and now - cached[0] < _EULA_PROMPT_LOG_TTL_SECONDS:
+        return cached[1]
+
+    detected = False
+
+    if shutil.which('docker') is not None:
+        try:
+            result = subprocess.run(
+                ['docker', 'logs', '--tail', '200', container],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            detected = False
+        else:
+            output_parts = []
+            if result.stdout:
+                output_parts.append(result.stdout)
+            if result.stderr:
+                output_parts.append(result.stderr)
+            if output_parts:
+                combined = '\n'.join(part.rstrip() for part in output_parts)
+                detected = any(
+                    pattern in combined for pattern in _EULA_PROMPT_LOG_PATTERNS
+                )
+
+    _EULA_PROMPT_LOG_CACHE[container] = (now, detected)
+    return detected
+
+
 def _docker_health_log(container: str) -> list[dict[str, object]]:
     """Return the Docker health check log entries for ``container``."""
 
@@ -3383,6 +3434,7 @@ def ensure_vertica_container_running(
     last_degraded_log_dump: Optional[float] = None
     admintools_permissions_checked = False
     last_direct_connect_attempt: Optional[float] = None
+    eula_recreate_attempted = False
 
     compose_deadline = time.time() + compose_timeout
 
@@ -3492,6 +3544,26 @@ def ensure_vertica_container_running(
                         )
                     degraded_logged_duration = degraded_duration
                 _sanitize_vertica_data_directories()
+                if not eula_recreate_attempted and _container_reports_eula_prompt('vertica_ce'):
+                    if compose_file is None:
+                        compose_file = _compose_file()
+                    if compose_file is not None:
+                        log(
+                            'Vertica container logs indicate the EULA prompt is blocking startup; '
+                            'ensuring acceptance variables and recreating container'
+                        )
+                        _ensure_compose_accepts_eula(compose_file)
+                        _ensure_ecr_login_if_needed(compose_file)
+                        _compose_up(compose_file, force_recreate=True)
+                        eula_recreate_attempted = True
+                        restart_attempts = 0
+                        recreate_attempts = 0
+                        degraded_observed_at = None
+                        degraded_logged_duration = None
+                        last_degraded_log_dump = None
+                        admintools_permissions_checked = False
+                        time.sleep(15)
+                        continue
                 time.sleep(10)
                 continue
 

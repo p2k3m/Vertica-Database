@@ -153,17 +153,25 @@ services:
     volumes:
       - /var/lib/vertica:/data/vertica
     environment:
+      - VERTICA_ACCEPT_EULA=ACCEPT
       - VERTICA_DB_NAME=${vertica_db_name}
       - VERTICA_DB_USER=${bootstrap_admin_username}
       - VERTICA_DB_PASSWORD=${bootstrap_admin_password}
+      - VERTICA_EULA_ACCEPTANCE=ACCEPT
       - VERTICA_DB_EULA_ACCEPTED=1
       - VERTICA_EULA_ACCEPTED=1
       # Use uppercase ACCEPT tokens to satisfy newer Vertica images that enforce
       # case-sensitive EULA checks while remaining backwards compatible.
       - VERTICA_DB_EULA=ACCEPT
       - VERTICA_EULA=ACCEPT
+      - VERTICA_LICENSE=ACCEPT
+      - VERTICA_LICENSE_ACCEPTED=1
+      - VERTICA_LICENSE_STATUS=ACCEPT
+      - VERTICA_MC_ACCEPT_EULA=ACCEPT
       - VERTICA_MC_EULA=ACCEPT
       - VERTICA_MC_EULA_ACCEPTED=1
+      - VERTICA_MC_LICENSE=ACCEPT
+      - VERTICA_MC_LICENSE_ACCEPTED=1
 YAML
 
 mkdir -p /var/lib/vertica

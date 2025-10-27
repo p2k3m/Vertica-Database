@@ -24,6 +24,7 @@ def _disable_container_restart(monkeypatch):
 def _reset_same_file_state(monkeypatch):
     monkeypatch.setattr(smoke, '_CONFIG_COPY_SAME_FILE_LOG_CACHE', {})
     monkeypatch.setattr(smoke, '_VERTICA_CONFIG_SAME_FILE_RECOVERED', {})
+    monkeypatch.setattr(smoke, '_EULA_PROMPT_LOG_CACHE', {})
 
 
 @pytest.fixture(autouse=True)
@@ -118,6 +119,41 @@ def test_container_restart_count(monkeypatch):
 
     responses['{{.RestartCount}}'] = 'invalid'
     assert smoke._container_restart_count('vertica_ce') is None
+
+
+def test_container_reports_eula_prompt(monkeypatch):
+    calls = {'count': 0}
+
+    def fake_time() -> float:
+        return 1_700_000_000.0 + calls['count'] * 5.0
+
+    def fake_run(cmd, *, capture_output, text):
+        calls['count'] += 1
+
+        class Result:
+            returncode = 0
+            stdout = (
+                "Starting MC agent\nOutput is not a tty --- can't reliably display EULA\n"
+                if calls['count'] == 1
+                else ''
+            )
+            stderr = ''
+
+        return Result()
+
+    monkeypatch.setattr(smoke.shutil, 'which', lambda name: '/usr/bin/docker')
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+
+    try:
+        assert smoke._container_reports_eula_prompt('vertica_ce') is True
+        # Cached result should avoid re-running docker logs until TTL expires
+        assert smoke._container_reports_eula_prompt('vertica_ce') is True
+        # Advance time beyond TTL to force refresh without the pattern present
+        calls['count'] = int(smoke._EULA_PROMPT_LOG_TTL_SECONDS / 5.0) + 2
+        assert smoke._container_reports_eula_prompt('vertica_ce') is False
+    finally:
+        smoke._EULA_PROMPT_LOG_CACHE.pop('vertica_ce', None)
 
 
 def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
@@ -255,6 +291,67 @@ def test_ensure_vertica_resets_data_directories(monkeypatch):
 
     assert compose_calls == [True, True, True]
     assert reset_calls == [True]
+
+
+def test_ensure_vertica_recreates_on_eula_prompt(monkeypatch):
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    def fake_sleep(seconds: float) -> None:
+        current_time['value'] += seconds
+
+    compose_calls: list[bool] = []
+    eula_checks: list[bool] = []
+
+    def fake_compose_up(path: Path, force_recreate: bool = False) -> None:
+        compose_calls.append(force_recreate)
+
+    def fake_sanitize() -> None:
+        pass
+
+    health_states = iter(['unhealthy', 'healthy'])
+
+    def fake_docker_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return next(health_states)
+        if template == '{{.RestartCount}}':
+            return '0'
+        raise AssertionError(f'unexpected template: {template}')
+
+    def fake_eula_prompt(container: str) -> bool:
+        observed = not eula_checks
+        eula_checks.append(True)
+        return observed
+
+    monkeypatch.setattr(smoke, '_ensure_docker_compose_cli', lambda: None)
+    monkeypatch.setattr(smoke, '_compose_file', lambda: Path('compose.yml'))
+    monkeypatch.setattr(smoke, '_ensure_ecr_login_if_needed', lambda path: None)
+    monkeypatch.setattr(smoke, '_compose_up', fake_compose_up)
+    monkeypatch.setattr(smoke, '_sanitize_vertica_data_directories', fake_sanitize)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 5.0)
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_docker_inspect)
+    monkeypatch.setattr(smoke, '_container_is_responding', lambda: False)
+    monkeypatch.setattr(smoke, '_container_reports_eula_prompt', fake_eula_prompt)
+    monkeypatch.setattr(smoke, '_log_container_tail', lambda container, tail=200: None)
+    monkeypatch.setattr(smoke, '_log_health_log_entries', lambda container, count: count)
+    monkeypatch.setattr(smoke, '_ensure_container_admintools_conf_readable', lambda container: False)
+    monkeypatch.setattr(smoke, '_reset_vertica_data_directories', lambda: False)
+    monkeypatch.setattr(smoke, 'run_command', lambda command: None)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', fake_sleep)
+    monkeypatch.setattr(smoke, 'UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS', 30.0)
+
+    smoke.ensure_vertica_container_running(timeout=120.0, compose_timeout=0.0)
+
+    assert compose_calls and compose_calls[0] is True
+    # Only the first unhealthy observation should trigger the recreate
+    assert len(compose_calls) == 1
+    assert eula_checks == [True]
 
 
 def test_ensure_vertica_restarts_prolonged_starting(monkeypatch):
