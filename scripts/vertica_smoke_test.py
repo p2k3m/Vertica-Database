@@ -2636,6 +2636,27 @@ def _log_health_log_entries(
     return len(entries)
 
 
+def _health_log_indicates_missing_database(
+    entries: list[dict[str, object]], database: str
+) -> bool:
+    """Return ``True`` when health log output references a missing database."""
+
+    if not entries:
+        return False
+
+    database_token = f'database {database}'.lower()
+
+    for entry in entries:
+        output = entry.get('Output')
+        if not output:
+            continue
+        normalized = str(output).lower()
+        if database_token in normalized and 'not defined' in normalized:
+            return True
+
+    return False
+
+
 def _log_container_tail(container: str, tail: int = 200) -> None:
     """Log the most recent ``tail`` lines of stdout/stderr from ``container``."""
 
@@ -2682,6 +2703,50 @@ def _fetch_container_env(container: str) -> dict[str, str]:
         key, value = entry.split('=', 1)
         env[key] = value
     return env
+
+
+def _attempt_vertica_database_creation(container: str, database: str) -> bool:
+    """Attempt to create ``database`` inside ``container`` using admintools."""
+
+    env = _fetch_container_env(container)
+    password = env.get('VERTICA_DB_PASSWORD')
+    if password is None:
+        password = os.environ.get('DBADMIN_PASSWORD', '')
+
+    host = (
+        env.get('VERTICA_DB_HOST')
+        or env.get('VERTICA_HOST')
+        or '127.0.0.1'
+    )
+
+    log(
+        'Invoking Vertica admintools to create database '
+        f"{database!r} inside container {container}"
+    )
+
+    command = (
+        "/opt/vertica/bin/admintools -t create_db -s "
+        f"{shlex.quote(host)} -d {shlex.quote(database)} -p {shlex.quote(password)}"
+    )
+    script = 'set -e\n' + command
+
+    result = _docker_exec_prefer_container_admin(
+        container,
+        ['sh', '-c', script],
+        'Docker CLI is not available while creating Vertica database',
+    )
+    if result is None:
+        return False
+
+    if result.returncode != 0:
+        log(
+            'Vertica database creation command exited with '
+            f'code {result.returncode}; continuing recovery attempts'
+        )
+        return False
+
+    log('Requested Vertica database creation inside container; waiting for recovery')
+    return True
 
 
 _DOCKER_TIMESTAMP_PATTERN = re.compile(
@@ -3771,14 +3836,18 @@ def ensure_vertica_container_running(
     eula_recreate_attempted = False
     eula_acceptance_attempted = False
     eula_acceptance_successful = False
+    database_creation_attempted = False
+    database_missing_logged = False
 
     compose_deadline = time.time() + compose_timeout
 
     while time.time() < deadline:
         status = _docker_inspect('vertica_ce', '{{.State.Status}}')
         health = _docker_inspect('vertica_ce', '{{if .State.Health}}{{.State.Health.Status}}{{end}}')
+        health_entries: list[dict[str, object]] = []
         if status:
-            health_log_count = _log_health_log_entries('vertica_ce', health_log_count)
+            health_entries = _docker_health_log('vertica_ce')
+        health_log_count = _log_health_log_entries('vertica_ce', health_log_count)
         if status == 'running' and (not health or health == 'healthy'):
             degraded_observed_at = None
             degraded_logged_duration = None
@@ -3830,6 +3899,8 @@ def ensure_vertica_container_running(
             admintools_permissions_checked = False
             eula_acceptance_attempted = False
             eula_acceptance_successful = False
+            database_creation_attempted = False
+            database_missing_logged = False
         elif status not in {'running', 'restarting'}:
             run_command(['docker', 'start', 'vertica_ce'])
             restart_attempts = 0
@@ -3840,6 +3911,8 @@ def ensure_vertica_container_running(
             admintools_permissions_checked = False
             eula_acceptance_attempted = False
             eula_acceptance_successful = False
+            database_creation_attempted = False
+            database_missing_logged = False
         elif health in {'unhealthy', 'starting'}:
             now = time.time()
             if degraded_observed_at is None:
@@ -3847,6 +3920,9 @@ def ensure_vertica_container_running(
 
             degraded_duration = now - degraded_observed_at
             state_is_unhealthy = health == 'unhealthy'
+            missing_database_detected = _health_log_indicates_missing_database(
+                health_entries, DB_NAME
+            )
 
             if (
                 degraded_duration >= 120
@@ -3865,6 +3941,25 @@ def ensure_vertica_container_running(
                     _sanitize_vertica_data_directories()
                     time.sleep(5)
                     continue
+
+            if (
+                status == 'running'
+                and missing_database_detected
+                and not database_creation_attempted
+            ):
+                if not database_missing_logged:
+                    log(
+                        'Vertica health checks indicate the configured database '
+                        f"{DB_NAME!r} is missing; attempting to create it inside the container"
+                    )
+                    database_missing_logged = True
+                if _attempt_vertica_database_creation('vertica_ce', DB_NAME):
+                    database_creation_attempted = True
+                    degraded_observed_at = None
+                    degraded_logged_duration = None
+                    last_degraded_log_dump = None
+                    continue
+                database_creation_attempted = True
 
             if degraded_duration < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS:
                 if (
@@ -3896,6 +3991,8 @@ def ensure_vertica_container_running(
                         degraded_logged_duration = None
                         last_degraded_log_dump = None
                         admintools_permissions_checked = False
+                        database_creation_attempted = False
+                        database_missing_logged = False
                         time.sleep(10)
                         continue
                 if not eula_recreate_attempted and eula_prompt_detected:
@@ -3918,6 +4015,8 @@ def ensure_vertica_container_running(
                         admintools_permissions_checked = False
                         eula_acceptance_attempted = False
                         eula_acceptance_successful = False
+                        database_creation_attempted = False
+                        database_missing_logged = False
                         time.sleep(15)
                         continue
                 time.sleep(10)
@@ -3986,6 +4085,8 @@ def ensure_vertica_container_running(
                 last_degraded_log_dump = None
                 eula_acceptance_attempted = False
                 eula_acceptance_successful = False
+                database_creation_attempted = False
+                database_missing_logged = False
                 continue
 
             if compose_file is None:
@@ -4006,6 +4107,8 @@ def ensure_vertica_container_running(
                 last_degraded_log_dump = None
                 eula_acceptance_attempted = False
                 eula_acceptance_successful = False
+                database_creation_attempted = False
+                database_missing_logged = False
                 continue
 
             if not data_reset_attempted:
@@ -4022,6 +4125,8 @@ def ensure_vertica_container_running(
                     last_degraded_log_dump = None
                     eula_acceptance_attempted = False
                     eula_acceptance_successful = False
+                    database_creation_attempted = False
+                    database_missing_logged = False
                     if compose_file is not None:
                         _ensure_compose_accepts_eula(compose_file)
                         _ensure_ecr_login_if_needed(compose_file)
