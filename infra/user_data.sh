@@ -154,6 +154,7 @@ services:
       - /var/lib/vertica:/data/vertica
     environment:
       - VERTICA_ACCEPT_EULA=ACCEPT
+      - ACCEPT_EULA=ACCEPT
       - VERTICA_DB_NAME=${vertica_db_name}
       - VERTICA_DB_USER=${bootstrap_admin_username}
       - VERTICA_DB_PASSWORD=${bootstrap_admin_password}
@@ -167,11 +168,15 @@ services:
       - VERTICA_LICENSE=ACCEPT
       - VERTICA_LICENSE_ACCEPTED=1
       - VERTICA_LICENSE_STATUS=ACCEPT
+      - VERTICA_ACCEPT_LICENSE=ACCEPT
+      - VERTICA_LICENSE_ACCEPTANCE=ACCEPT
       - VERTICA_MC_ACCEPT_EULA=ACCEPT
       - VERTICA_MC_EULA=ACCEPT
       - VERTICA_MC_EULA_ACCEPTED=1
+      - VERTICA_MC_ACCEPT_LICENSE=ACCEPT
       - VERTICA_MC_LICENSE=ACCEPT
       - VERTICA_MC_LICENSE_ACCEPTED=1
+      - VERTICA_MC_LICENSE_ACCEPTANCE=ACCEPT
 YAML
 
 mkdir -p /var/lib/vertica

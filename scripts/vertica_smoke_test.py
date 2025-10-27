@@ -71,11 +71,14 @@ _EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
     'VERTICA_EULA': 'ACCEPT',
     'VERTICA_EULA_ACCEPTANCE': 'ACCEPT',
     'VERTICA_EULA_ACCEPTED': '1',
+    'ACCEPT_EULA': 'ACCEPT',
     'VERTICA_DB_EULA': 'ACCEPT',
     'VERTICA_DB_EULA_ACCEPTED': '1',
     'VERTICA_LICENSE': 'ACCEPT',
     'VERTICA_LICENSE_ACCEPTED': '1',
     'VERTICA_LICENSE_STATUS': 'ACCEPT',
+    'VERTICA_ACCEPT_LICENSE': 'ACCEPT',
+    'VERTICA_LICENSE_ACCEPTANCE': 'ACCEPT',
     # Newer Vertica container images ship an updated web-based Management Console
     # agent that enforces its own EULA prompt during startup.  The agent shares
     # the same container as the database which means that an unanswered prompt
@@ -86,8 +89,10 @@ _EULA_ENVIRONMENT_VARIABLES: dict[str, str] = {
     'VERTICA_MC_ACCEPT_EULA': 'ACCEPT',
     'VERTICA_MC_EULA': 'ACCEPT',
     'VERTICA_MC_EULA_ACCEPTED': '1',
+    'VERTICA_MC_ACCEPT_LICENSE': 'ACCEPT',
     'VERTICA_MC_LICENSE': 'ACCEPT',
     'VERTICA_MC_LICENSE_ACCEPTED': '1',
+    'VERTICA_MC_LICENSE_ACCEPTANCE': 'ACCEPT',
 }
 
 
