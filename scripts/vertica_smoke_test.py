@@ -36,8 +36,8 @@ VERTICA_ADMIN_FALLBACK_GID = 500
 # test can preemptively fix permissions even before the container starts (and
 # exposes its runtime identity for discovery via ``docker exec``).
 VERTICA_ADMIN_COMMON_IDENTITIES = (
-    (VERTICA_ADMIN_FALLBACK_UID, VERTICA_ADMIN_FALLBACK_GID),
     (1000, 1000),
+    (VERTICA_ADMIN_FALLBACK_UID, VERTICA_ADMIN_FALLBACK_GID),
 )
 ADMIN_USER = os.environ['ADMIN_USER']
 ADMIN_PASSWORD = os.environ['ADMIN_PASSWORD']
@@ -368,10 +368,15 @@ def _ensure_vertica_admin_identity(path: Path) -> None:
         log(f'Unable to inspect ownership of {path} while aligning with Vertica admin: {exc}')
         return
 
-    candidates = _vertica_admin_identity_candidates()
-    seen_candidates = set(candidates)
+    candidates: list[tuple[int, int]] = []
+    seen_candidates: set[tuple[int, int]] = set()
 
     for identity in _discover_existing_vertica_admin_identities():
+        if identity not in seen_candidates:
+            candidates.append(identity)
+            seen_candidates.add(identity)
+
+    for identity in _vertica_admin_identity_candidates():
         if identity not in seen_candidates:
             candidates.append(identity)
             seen_candidates.add(identity)
