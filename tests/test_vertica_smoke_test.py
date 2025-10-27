@@ -1362,6 +1362,48 @@ def test_ensure_vertica_admin_identity_uses_discovered_candidates(tmp_path, monk
     assert chown_calls == [(target, 4242, 4343)]
 
 
+def test_ensure_vertica_admin_identity_prefers_candidate_order(tmp_path, monkeypatch):
+    base = tmp_path / 'vertica'
+    config_dir = base / 'config'
+    config_dir.mkdir(parents=True)
+
+    target = config_dir / 'admintools.conf'
+    target.write_text('test')
+
+    monkeypatch.setattr(smoke, 'VERTICA_DATA_DIRECTORIES', [base], raising=False)
+    monkeypatch.setattr(smoke.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(
+        smoke,
+        '_discover_existing_vertica_admin_identities',
+        lambda **kwargs: [],
+    )
+    monkeypatch.setattr(
+        smoke,
+        '_vertica_admin_identity_candidates',
+        lambda: [(1111, 1111), (2222, 2222)],
+    )
+
+    original_stat = smoke.Path.stat
+
+    def fake_stat(self):
+        if self == target:
+            return SimpleNamespace(st_uid=0, st_gid=0)
+        return original_stat(self)
+
+    monkeypatch.setattr(smoke.Path, 'stat', fake_stat)
+
+    chown_calls: list[tuple[Path, int, int]] = []
+
+    def fake_chown(path, uid, gid):
+        chown_calls.append((Path(path), uid, gid))
+
+    monkeypatch.setattr(smoke.os, 'chown', fake_chown)
+
+    smoke._ensure_vertica_admin_identity(target)
+
+    assert chown_calls == [(target, 1111, 1111)]
+
+
 def test_ensure_container_admintools_conf_readable_adjusts(monkeypatch):
     logs: list[str] = []
     calls: list[list[str]] = []
