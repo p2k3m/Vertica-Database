@@ -2746,49 +2746,92 @@ def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
         log(f'Unable to read {compose_file} while ensuring EULA acceptance: {exc}')
         return False
 
-    missing = [
-        key
-        for key in _EULA_ENVIRONMENT_VARIABLES
-        if f'{key}=' not in original
-    ]
-
-    if not missing:
-        return False
-
     lines = original.splitlines()
     updated = False
+    index = 0
 
-    for index, line in enumerate(lines):
-        if line.strip() != 'environment:':
+    while index < len(lines):
+        raw_line = lines[index]
+        stripped = raw_line.strip()
+
+        if not stripped.startswith('environment:'):
+            index += 1
             continue
 
-        indent = line[: len(line) - len(line.lstrip())]
+        indent = raw_line[: len(raw_line) - len(raw_line.lstrip())]
         value_indent = indent + '  '
 
-        insert_position = index + 1
-        while insert_position < len(lines) and lines[insert_position].startswith(
-            value_indent + '- '
-        ):
-            insert_position += 1
+        remainder = stripped[len('environment:') :].strip()
+        inline_mode: Optional[str] = None
+        if remainder:
+            if remainder == '{}':
+                inline_mode = 'mapping'
+                lines[index] = f'{indent}environment:'
+            elif remainder == '[]':
+                inline_mode = 'list'
+                lines[index] = f'{indent}environment:'
+            else:
+                index += 1
+                continue
 
-        new_entries = [
-            f"{value_indent}- {key}={_EULA_ENVIRONMENT_VARIABLES[key]}"
+        block_start = index + 1
+        block_end = block_start
+        while block_end < len(lines):
+            next_line = lines[block_end]
+            if not next_line.startswith(value_indent):
+                break
+            block_end += 1
+
+        block_lines = lines[block_start:block_end]
+
+        existing_keys: set[str] = set()
+        block_type: Optional[str] = inline_mode
+        for entry in block_lines:
+            stripped_entry = entry.strip()
+            if not stripped_entry or stripped_entry.startswith('#'):
+                continue
+            if stripped_entry.startswith('- '):
+                block_type = block_type or 'list'
+                assignment = stripped_entry[2:]
+                key, _, _ = assignment.partition('=')
+                if key:
+                    existing_keys.add(key.strip())
+            else:
+                block_type = block_type or 'mapping'
+                key, _, _ = stripped_entry.partition(':')
+                if key:
+                    existing_keys.add(key.strip())
+
+        if block_type is None:
+            block_type = 'mapping'
+
+        missing = [
+            key
             for key in _EULA_ENVIRONMENT_VARIABLES
-            if key in missing
+            if key not in existing_keys
         ]
 
-        if not new_entries:
-            return False
+        if not missing:
+            index = block_end
+            continue
 
-        lines = lines[:insert_position] + new_entries + lines[insert_position:]
+        if block_type == 'list':
+            new_entries = [
+                f"{value_indent}- {key}={_EULA_ENVIRONMENT_VARIABLES[key]}"
+                for key in missing
+            ]
+        else:
+            new_entries = [
+                f"{value_indent}{key}: {_EULA_ENVIRONMENT_VARIABLES[key]}"
+                for key in missing
+            ]
+
+        lines = lines[:block_end] + new_entries + lines[block_end:]
+        block_end += len(new_entries)
         updated = True
-        break
+        index = block_end
 
     if not updated:
-        log(
-            f'Compose file {compose_file} lacks an environment block; unable to insert '
-            'EULA acceptance variables automatically'
-        )
         return False
 
     try:
