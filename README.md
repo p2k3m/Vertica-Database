@@ -127,3 +127,47 @@ directories as described above.
 ## Tests
 
 The `tests/` directory contains a simple connectivity test (`SELECT 1` + table listing) that matches the GitHub Actions smoke check. Install dependencies with `pip install -r tests/requirements.txt` if you want to run it locally against the deployed host.
+
+## Automated pipeline self-healing
+
+The repository ships with `scripts/auto_fix_pipeline.py`, a helper that triages failing
+GitHub Actions runs on `main`, asks an LLM for a patch, opens a pull request, and keeps
+iterating until the checks pass or the attempt budget is exhausted. A dedicated workflow
+(`.github/workflows/auto-fix.yml`) triggers this automation whenever the `apply` or
+`destroy` workflows finish with a failure.
+
+### Required secrets and variables
+
+To allow the fixer to authenticate with GitHub and the OpenAI API, configure the
+following repository secrets:
+
+- `AUTO_FIX_GITHUB_TOKEN` – a fine-grained personal access token with `contents:write`,
+  `pull_requests:write`, and `actions:read` permissions. This token is used both for the
+  GitHub REST/GraphQL APIs and to push branches.
+- `OPENAI_API_KEY` – the API key for the OpenAI project that should service the LLM
+  requests. The script defaults to the `gpt-4.1-mini` model but any compatible
+  completion model can be supplied through the `--model` flag.
+
+The GitHub Action installs `scripts/requirements-autofix.txt`, which currently depends on
+`openai` and `requests`. If you run the fixer locally, install the same requirements and
+provide the `GITHUB_TOKEN`/`OPENAI_API_KEY` environment variables before invoking the
+script.
+
+### Manual execution
+
+You can run the fixer from your workstation or another CI system with:
+
+```bash
+python scripts/auto_fix_pipeline.py \
+  --owner <github-owner> \
+  --repo <repository> \
+  --repo-url https://github.com/<github-owner>/<repository>.git \
+  --working-dir /tmp/auto-fix
+```
+
+Set `GITHUB_TOKEN` and `OPENAI_API_KEY` in the environment before calling the script. Use
+`--max-iterations` to bound the number of automated fix attempts and `--poll-interval`
+to control how frequently GitHub check runs are inspected.
+
+When cloning locally, ensure your Git configuration can authenticate pushes (for example,
+set up a credential helper or supply a PAT in the `--repo-url`).

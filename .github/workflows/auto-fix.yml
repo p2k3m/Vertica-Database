@@ -1,0 +1,44 @@
+name: Auto Fix Failed Workflows
+
+on:
+  workflow_run:
+    workflows:
+      - apply
+      - destroy
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  auto-fix:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements-autofix.txt
+
+      - name: Run automated fixer
+        env:
+          GITHUB_TOKEN: ${{ secrets.AUTO_FIX_GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          REPO_URL: https://x-access-token:${{ secrets.AUTO_FIX_GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+          python scripts/auto_fix_pipeline.py \
+            --owner "${{ github.repository_owner }}" \
+            --repo "${{ github.event.workflow_run.repository.name }}" \
+            --repo-url "$REPO_URL" \
+            --working-dir /tmp/auto-fix-workdir \
+            --log-level INFO
