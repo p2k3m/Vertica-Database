@@ -3321,10 +3321,10 @@ def ensure_vertica_container_running(
     restart_attempts = 0
     recreate_attempts = 0
     data_reset_attempted = False
-    unhealthy_observed_at: Optional[float] = None
-    unhealthy_logged_duration: Optional[float] = None
+    degraded_observed_at: Optional[float] = None
+    degraded_logged_duration: Optional[float] = None
     health_log_count = 0
-    last_unhealthy_log_dump: Optional[float] = None
+    last_degraded_log_dump: Optional[float] = None
     admintools_permissions_checked = False
     last_direct_connect_attempt: Optional[float] = None
 
@@ -3336,20 +3336,21 @@ def ensure_vertica_container_running(
         if status:
             health_log_count = _log_health_log_entries('vertica_ce', health_log_count)
         if status == 'running' and (not health or health == 'healthy'):
-            unhealthy_observed_at = None
-            unhealthy_logged_duration = None
-            last_unhealthy_log_dump = None
+            degraded_observed_at = None
+            degraded_logged_duration = None
+            last_degraded_log_dump = None
             admintools_permissions_checked = False
             log(f'Vertica container status: {status}, health: {health or "unknown"}')
             return
 
         if (status, health) != last_status:
+            previous_status, previous_health = last_status
             last_status = (status, health)
             log(f'Current Vertica container status: {status or "<absent>"}, health: {health or "<unknown>"}')
-            if health != 'unhealthy':
-                unhealthy_observed_at = None
-                unhealthy_logged_duration = None
-                last_unhealthy_log_dump = None
+            if health not in {'unhealthy', 'starting'} or previous_health != health:
+                degraded_observed_at = None
+                degraded_logged_duration = None
+                last_degraded_log_dump = None
                 admintools_permissions_checked = False
 
         if status is None:
@@ -3378,30 +3379,35 @@ def ensure_vertica_container_running(
             _compose_up(compose_file)
             restart_attempts = 0
             recreate_attempts = 0
-            unhealthy_observed_at = None
-            unhealthy_logged_duration = None
-            last_unhealthy_log_dump = None
+            degraded_observed_at = None
+            degraded_logged_duration = None
+            last_degraded_log_dump = None
             admintools_permissions_checked = False
         elif status not in {'running', 'restarting'}:
             run_command(['docker', 'start', 'vertica_ce'])
             restart_attempts = 0
             recreate_attempts = 0
-            unhealthy_observed_at = None
-            unhealthy_logged_duration = None
-            last_unhealthy_log_dump = None
+            degraded_observed_at = None
+            degraded_logged_duration = None
+            last_degraded_log_dump = None
             admintools_permissions_checked = False
-        elif health == 'unhealthy':
+        elif health in {'unhealthy', 'starting'}:
             now = time.time()
-            if unhealthy_observed_at is None:
-                unhealthy_observed_at = now
+            if degraded_observed_at is None:
+                degraded_observed_at = now
 
-            unhealthy_duration = now - unhealthy_observed_at
+            degraded_duration = now - degraded_observed_at
+            state_is_unhealthy = health == 'unhealthy'
+
             if (
-                unhealthy_duration >= 120
-                and (last_unhealthy_log_dump is None or now - last_unhealthy_log_dump >= 120)
+                degraded_duration >= 120
+                and (
+                    last_degraded_log_dump is None
+                    or now - last_degraded_log_dump >= 120
+                )
             ):
                 _log_container_tail('vertica_ce', tail=200)
-                last_unhealthy_log_dump = now
+                last_degraded_log_dump = now
 
             if not admintools_permissions_checked:
                 admintools_permissions_checked = True
@@ -3410,21 +3416,25 @@ def ensure_vertica_container_running(
                     _sanitize_vertica_data_directories()
                     time.sleep(5)
                     continue
-            if (
-                unhealthy_duration
-                < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS
-            ):
+
+            if degraded_duration < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS:
                 if (
-                    unhealthy_logged_duration is None
-                    or unhealthy_duration - unhealthy_logged_duration >= 30
-                    or unhealthy_duration < unhealthy_logged_duration
+                    degraded_logged_duration is None
+                    or degraded_duration - degraded_logged_duration >= 30
+                    or degraded_duration < degraded_logged_duration
                 ):
-                    log(
-                        'Vertica container health reported unhealthy but has '
-                        f'been unhealthy for {unhealthy_duration:.0f}s; '
-                        'waiting for recovery'
-                    )
-                    unhealthy_logged_duration = unhealthy_duration
+                    if state_is_unhealthy:
+                        log(
+                            'Vertica container health reported unhealthy but has '
+                            f'been unhealthy for {degraded_duration:.0f}s; '
+                            'waiting for recovery'
+                        )
+                    else:
+                        log(
+                            'Vertica container health remains in starting state '
+                            f'after {degraded_duration:.0f}s; waiting for readiness'
+                        )
+                    degraded_logged_duration = degraded_duration
                 _sanitize_vertica_data_directories()
                 time.sleep(10)
                 continue
@@ -3435,54 +3445,79 @@ def ensure_vertica_container_running(
             ):
                 last_direct_connect_attempt = now
                 if _container_is_responding():
-                    log(
-                        'Vertica container health remains unhealthy but direct '
-                        'connection succeeded; proceeding despite health check'
-                    )
+                    if state_is_unhealthy:
+                        log(
+                            'Vertica container health remains unhealthy but direct '
+                            'connection succeeded; proceeding despite health check'
+                        )
+                    else:
+                        log(
+                            'Vertica container health check is still reporting '
+                            'starting but direct connection succeeded; proceeding '
+                            'despite health check'
+                        )
                     return
 
             uptime = _container_uptime_seconds('vertica_ce')
             if uptime is None:
-                log(
-                    'Vertica container health reported unhealthy but uptime '
-                    'could not be determined; assuming the container is still starting'
-                )
+                if state_is_unhealthy:
+                    log(
+                        'Vertica container health reported unhealthy but uptime '
+                        'could not be determined; assuming the container is still starting'
+                    )
+                else:
+                    log(
+                        'Vertica container health remains in starting state but '
+                        'uptime could not be determined; continuing to wait'
+                    )
                 _sanitize_vertica_data_directories()
                 time.sleep(10)
                 continue
-            if uptime is not None and uptime < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS:
-                log(
-                    'Vertica container health reported unhealthy but uptime '
-                    f'{uptime:.0f}s is within grace period; waiting for recovery'
-                )
-                unhealthy_logged_duration = unhealthy_duration
+            if uptime < UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS:
+                if state_is_unhealthy:
+                    log(
+                        'Vertica container health reported unhealthy but uptime '
+                        f'{uptime:.0f}s is within grace period; waiting for recovery'
+                    )
+                else:
+                    log(
+                        'Vertica container health remains in starting state but '
+                        f'uptime {uptime:.0f}s is within grace period; waiting for readiness'
+                    )
+                degraded_logged_duration = degraded_duration
                 _sanitize_vertica_data_directories()
                 time.sleep(10)
                 continue
 
             if restart_attempts < 3:
-                log('Vertica container health check reported unhealthy; restarting container')
+                if state_is_unhealthy:
+                    log('Vertica container health check reported unhealthy; restarting container')
+                else:
+                    log('Vertica container health check remained in starting state; restarting container')
                 run_command(['docker', 'restart', 'vertica_ce'])
                 restart_attempts += 1
                 time.sleep(10)
-                unhealthy_observed_at = None
-                unhealthy_logged_duration = None
-                last_unhealthy_log_dump = None
+                degraded_observed_at = None
+                degraded_logged_duration = None
+                last_degraded_log_dump = None
                 continue
 
             if compose_file is None:
                 compose_file = _compose_file()
             if compose_file is not None and recreate_attempts < 2:
-                log('Vertica container remains unhealthy; recreating via docker compose')
+                if state_is_unhealthy:
+                    log('Vertica container remains unhealthy; recreating via docker compose')
+                else:
+                    log('Vertica container remains in starting state; recreating via docker compose')
                 _ensure_compose_accepts_eula(compose_file)
                 _ensure_ecr_login_if_needed(compose_file)
                 _compose_up(compose_file, force_recreate=True)
                 recreate_attempts += 1
                 restart_attempts = 0
                 time.sleep(15)
-                unhealthy_observed_at = None
-                unhealthy_logged_duration = None
-                last_unhealthy_log_dump = None
+                degraded_observed_at = None
+                degraded_logged_duration = None
+                last_degraded_log_dump = None
                 continue
 
             if not data_reset_attempted:
@@ -3494,9 +3529,9 @@ def ensure_vertica_container_running(
                     _sanitize_vertica_data_directories()
                     restart_attempts = 0
                     recreate_attempts = 0
-                    unhealthy_observed_at = None
-                    unhealthy_logged_duration = None
-                    last_unhealthy_log_dump = None
+                    degraded_observed_at = None
+                    degraded_logged_duration = None
+                    last_degraded_log_dump = None
                     if compose_file is not None:
                         _ensure_compose_accepts_eula(compose_file)
                         _ensure_ecr_login_if_needed(compose_file)
@@ -3505,7 +3540,10 @@ def ensure_vertica_container_running(
                     continue
                 log('Failed to reset Vertica data directories or nothing to reset')
 
-            log('Vertica container is still unhealthy after recovery attempts; collecting diagnostics')
+            if state_is_unhealthy:
+                log('Vertica container is still unhealthy after recovery attempts; collecting diagnostics')
+            else:
+                log('Vertica container is still in starting state after recovery attempts; collecting diagnostics')
             try:
                 run_command(['docker', 'ps', '--filter', 'name=vertica_ce'])
             except SystemExit:
@@ -3514,8 +3552,9 @@ def ensure_vertica_container_running(
                 run_command(['docker', 'logs', '--tail', '200', 'vertica_ce'])
             except SystemExit:
                 pass
+            state_summary = 'unhealthy' if state_is_unhealthy else 'stuck in starting state'
             raise SystemExit(
-                'Vertica container vertica_ce remained unhealthy after restart and recreate attempts'
+                f'Vertica container vertica_ce remained {state_summary} after restart and recreate attempts'
             )
 
         time.sleep(5)
