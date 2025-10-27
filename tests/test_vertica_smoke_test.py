@@ -268,6 +268,48 @@ def test_ensure_compose_accepts_eula_handles_inline_mapping(tmp_path):
     assert any('BAR: baz' in line for line in updated)
     assert any('VERTICA_ACCEPT_EULA' in line for line in updated)
 
+def test_ensure_compose_accepts_eula_no_changes_required(tmp_path):
+    environment_entries = '\n'.join(
+        f'- {key}={value}'
+        for key, value in smoke._EULA_ENVIRONMENT_VARIABLES.items()
+    )
+    environment_block = textwrap.indent(environment_entries, '      ')
+    compose_content = (
+        "services:\n"
+        "  vertica_ce:\n"
+        "    image: vertica/vertica-ce:latest\n"
+        "    environment:\n"
+        f"{environment_block}\n"
+    )
+    compose = _compose_with_environment(tmp_path, compose_content)
+
+    original = compose.read_text()
+    assert smoke._ensure_compose_accepts_eula(compose) is True
+    assert compose.read_text() == original
+
+
+def test_ensure_compose_accepts_eula_finds_service_by_container_name(tmp_path):
+    compose = _compose_with_environment(
+        tmp_path,
+        textwrap.dedent(
+            """
+            services:
+              vertica:
+                container_name: vertica_ce
+                image: vertica/vertica-ce:latest
+            """
+        ).lstrip(),
+    )
+
+    assert smoke._ensure_compose_accepts_eula(compose) is True
+
+    updated = compose.read_text().splitlines()
+
+    assert any('container_name: vertica_ce' in line for line in updated)
+    assert any(line.strip().startswith('environment:') for line in updated)
+    assert any('VERTICA_ACCEPT_EULA' in line for line in updated)
+
+
 def test_ensure_vertica_respects_starting_grace(monkeypatch):
     current_time = {'value': 0.0}
 
