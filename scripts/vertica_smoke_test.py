@@ -2982,6 +2982,7 @@ def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
 
     lines = original.splitlines()
     updated = False
+    ensured = False
     index = 0
 
     while index < len(lines):
@@ -3005,6 +3006,7 @@ def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
             inline_mode, new_lines = conversion
             lines[index] = f'{indent}environment:'
             lines = lines[: index + 1] + new_lines + lines[index + 1 :]
+            updated = True
 
         block_start = index + 1
         block_end = block_start
@@ -3044,6 +3046,7 @@ def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
         ]
 
         if not missing:
+            ensured = True
             index = block_end
             continue
 
@@ -3061,9 +3064,14 @@ def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
         lines = lines[:block_end] + new_entries + lines[block_end:]
         block_end += len(new_entries)
         updated = True
+        ensured = True
         index = block_end
 
-    if not updated:
+    if ensured:
+        # The compose file already contains the necessary environment block.
+        if not updated:
+            return True
+    else:
         # No ``environment`` block was found; synthesize one under the Vertica service
         service_indent: Optional[str] = None
         service_index: Optional[int] = None
@@ -3076,6 +3084,29 @@ def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
                 service_indent = candidate_line[: len(candidate_line) - len(candidate_line.lstrip())]
                 service_index = candidate_index + 1
                 break
+
+        if service_indent is None or service_index is None:
+            # Fall back to locating the service that sets ``container_name: vertica_ce``
+            target = 'container_name: vertica_ce'
+            for candidate_index, candidate_line in enumerate(lines):
+                if candidate_line.strip() != target:
+                    continue
+
+                container_indent_len = len(candidate_line) - len(candidate_line.lstrip())
+                for reverse_index in range(candidate_index - 1, -1, -1):
+                    previous_line = lines[reverse_index]
+                    stripped_previous = previous_line.strip()
+                    if not stripped_previous or stripped_previous.startswith('#'):
+                        continue
+
+                    previous_indent_len = len(previous_line) - len(previous_line.lstrip())
+                    if previous_indent_len < container_indent_len and stripped_previous.endswith(':'):
+                        service_indent = previous_line[: len(previous_line) - len(previous_line.lstrip())]
+                        service_index = reverse_index + 1
+                        break
+
+                if service_indent is not None:
+                    break
 
         if service_indent is None or service_index is None:
             return False
@@ -3101,18 +3132,24 @@ def _ensure_compose_accepts_eula(compose_file: Path) -> bool:
 
         lines = lines[:insert_at] + new_lines + lines[insert_at:]
         updated = True
+        ensured = True
 
-    try:
-        compose_file.write_text('\n'.join(lines) + '\n')
-    except OSError as exc:
-        log(f'Unable to update {compose_file} with EULA acceptance variables: {exc}')
+    if not ensured:
         return False
 
-    log(
-        'Updated compose file {compose} to include Vertica EULA acceptance variables'.format(
-            compose=compose_file
+    if updated:
+        try:
+            compose_file.write_text('\n'.join(lines) + '\n')
+        except OSError as exc:
+            log(f'Unable to update {compose_file} with EULA acceptance variables: {exc}')
+            return False
+
+        log(
+            'Updated compose file {compose} to include Vertica EULA acceptance variables'.format(
+                compose=compose_file
+            )
         )
-    )
+
     return True
 
 _USER_DATA_PATHS = [
