@@ -186,8 +186,7 @@ if id -u dbadmin >/dev/null 2>&1; then
   echo "[user-data] Ensuring /var/lib/vertica is owned by dbadmin ($${chown_target})"
   chown -R "$${chown_target}" /var/lib/vertica
 else
-  echo "[user-data] Host dbadmin user not present; resetting /var/lib/vertica ownership to root:root"
-  chown -R root:root /var/lib/vertica
+  echo "[user-data] Host dbadmin user not present; leaving /var/lib/vertica ownership unchanged"
 fi
 
 chmod 777 /var/lib/vertica
