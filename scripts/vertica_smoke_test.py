@@ -2475,6 +2475,96 @@ def _container_reports_eula_prompt(container: str) -> bool:
     return detected
 
 
+def _detect_container_python_executable(container: str) -> Optional[str]:
+    """Return the Python executable available inside ``container`` if any."""
+
+    if shutil.which('docker') is None:
+        return None
+
+    candidates = [
+        '/opt/vertica/oss/python3/bin/python3',
+        '/opt/vertica/bin/python3',
+    ]
+
+    for candidate in candidates:
+        try:
+            result = subprocess.run(
+                ['docker', 'exec', container, 'test', '-x', candidate],
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            return None
+
+        if result.returncode == 0:
+            return candidate
+
+    try:
+        which_result = subprocess.run(
+            ['docker', 'exec', container, 'which', 'python3'],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+
+    if which_result.returncode == 0:
+        for line in which_result.stdout.splitlines():
+            candidate = line.strip()
+            if candidate:
+                return candidate
+
+    return None
+
+
+def _accept_vertica_eula(container: str = 'vertica_ce') -> bool:
+    """Attempt to record Vertica EULA acceptance inside ``container``."""
+
+    if shutil.which('docker') is None:
+        log('Docker CLI is unavailable while attempting to accept Vertica EULA')
+        return False
+
+    python_exec = _detect_container_python_executable(container)
+    if not python_exec:
+        log(
+            'Unable to determine Python interpreter inside Vertica container while '
+            'attempting to record EULA acceptance'
+        )
+        return False
+
+    script = (
+        'import vertica.shared.logging; '
+        'import vertica.tools.eula_checker; '
+        'vertica.shared.logging.setup_admintool_logging(); '
+        'vertica.tools.eula_checker.EulaChecker().write_acceptance()'
+    )
+
+    try:
+        result = subprocess.run(
+            ['docker', 'exec', container, python_exec, '-c', script],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log('Docker CLI is unavailable while attempting to accept Vertica EULA')
+        return False
+
+    if result.stdout:
+        log(result.stdout.rstrip())
+    if result.stderr:
+        log(f'[stderr] {result.stderr.rstrip()}')
+
+    if result.returncode != 0:
+        log(
+            'Failed to record Vertica EULA acceptance inside container '
+            f'{container}: exit code {result.returncode}'
+        )
+        return False
+
+    log(f'Recorded Vertica EULA acceptance within container {container}')
+    return True
+
+
 def _docker_health_log(container: str) -> list[dict[str, object]]:
     """Return the Docker health check log entries for ``container``."""
 
@@ -3679,6 +3769,8 @@ def ensure_vertica_container_running(
     admintools_permissions_checked = False
     last_direct_connect_attempt: Optional[float] = None
     eula_recreate_attempted = False
+    eula_acceptance_attempted = False
+    eula_acceptance_successful = False
 
     compose_deadline = time.time() + compose_timeout
 
@@ -3704,6 +3796,7 @@ def ensure_vertica_container_running(
                 degraded_logged_duration = None
                 last_degraded_log_dump = None
                 admintools_permissions_checked = False
+                eula_acceptance_attempted = False
 
         if status is None:
             if compose_file is None:
@@ -3735,6 +3828,8 @@ def ensure_vertica_container_running(
             degraded_logged_duration = None
             last_degraded_log_dump = None
             admintools_permissions_checked = False
+            eula_acceptance_attempted = False
+            eula_acceptance_successful = False
         elif status not in {'running', 'restarting'}:
             run_command(['docker', 'start', 'vertica_ce'])
             restart_attempts = 0
@@ -3743,6 +3838,8 @@ def ensure_vertica_container_running(
             degraded_logged_duration = None
             last_degraded_log_dump = None
             admintools_permissions_checked = False
+            eula_acceptance_attempted = False
+            eula_acceptance_successful = False
         elif health in {'unhealthy', 'starting'}:
             now = time.time()
             if degraded_observed_at is None:
@@ -3788,7 +3885,20 @@ def ensure_vertica_container_running(
                         )
                     degraded_logged_duration = degraded_duration
                 _sanitize_vertica_data_directories()
-                if not eula_recreate_attempted and _container_reports_eula_prompt('vertica_ce'):
+                eula_prompt_detected = _container_reports_eula_prompt('vertica_ce')
+                if eula_prompt_detected and not eula_acceptance_successful and not eula_acceptance_attempted:
+                    eula_acceptance_attempted = True
+                    if _accept_vertica_eula('vertica_ce'):
+                        eula_acceptance_successful = True
+                        restart_attempts = 0
+                        recreate_attempts = 0
+                        degraded_observed_at = None
+                        degraded_logged_duration = None
+                        last_degraded_log_dump = None
+                        admintools_permissions_checked = False
+                        time.sleep(10)
+                        continue
+                if not eula_recreate_attempted and eula_prompt_detected:
                     if compose_file is None:
                         compose_file = _compose_file()
                     if compose_file is not None:
@@ -3806,6 +3916,8 @@ def ensure_vertica_container_running(
                         degraded_logged_duration = None
                         last_degraded_log_dump = None
                         admintools_permissions_checked = False
+                        eula_acceptance_attempted = False
+                        eula_acceptance_successful = False
                         time.sleep(15)
                         continue
                 time.sleep(10)
@@ -3872,6 +3984,8 @@ def ensure_vertica_container_running(
                 degraded_observed_at = None
                 degraded_logged_duration = None
                 last_degraded_log_dump = None
+                eula_acceptance_attempted = False
+                eula_acceptance_successful = False
                 continue
 
             if compose_file is None:
@@ -3890,6 +4004,8 @@ def ensure_vertica_container_running(
                 degraded_observed_at = None
                 degraded_logged_duration = None
                 last_degraded_log_dump = None
+                eula_acceptance_attempted = False
+                eula_acceptance_successful = False
                 continue
 
             if not data_reset_attempted:
@@ -3904,6 +4020,8 @@ def ensure_vertica_container_running(
                     degraded_observed_at = None
                     degraded_logged_duration = None
                     last_degraded_log_dump = None
+                    eula_acceptance_attempted = False
+                    eula_acceptance_successful = False
                     if compose_file is not None:
                         _ensure_compose_accepts_eula(compose_file)
                         _ensure_ecr_login_if_needed(compose_file)
