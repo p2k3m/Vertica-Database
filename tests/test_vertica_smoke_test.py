@@ -248,6 +248,62 @@ def test_install_vertica_license_uses_fallback(monkeypatch):
     assert any('license -k install' in cmd for cmd in commands)
 
 
+def test_install_vertica_license_deploys_fallback_when_admintools_missing(monkeypatch):
+    paths: list[str] = ['/opt/vertica/config/d5415.dat']
+    monkeypatch.setattr(
+        smoke,
+        '_discover_container_license_files',
+        lambda _container: paths,
+    )
+
+    monkeypatch.setattr(
+        smoke,
+        '_docker_exec_prefer_container_admin',
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout='',
+            stderr='Unknown tool install_license',
+        ),
+    )
+
+    called: list[tuple[str, str]] = []
+
+    def fake_deploy(container: str, source: str) -> bool:
+        called.append((container, source))
+        return True
+
+    monkeypatch.setattr(smoke, '_deploy_vertica_license_fallback', fake_deploy)
+
+    assert smoke._install_vertica_license('vertica_ce') is True
+    assert called == [('vertica_ce', paths[0])]
+
+
+def test_install_vertica_license_fallback_failure(monkeypatch):
+    monkeypatch.setattr(
+        smoke,
+        '_discover_container_license_files',
+        lambda _container: ['/opt/vertica/config/license.dat'],
+    )
+
+    monkeypatch.setattr(
+        smoke,
+        '_docker_exec_prefer_container_admin',
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout='',
+            stderr='Unknown tool install_license',
+        ),
+    )
+
+    monkeypatch.setattr(
+        smoke,
+        '_deploy_vertica_license_fallback',
+        lambda *_args, **_kwargs: False,
+    )
+
+    assert smoke._install_vertica_license('vertica_ce') is False
+
+
 def test_discover_license_includes_known_candidates(monkeypatch):
     def fake_exec(container, command, message, allow_root_fallback=True):
         assert container == 'vertica_ce'
