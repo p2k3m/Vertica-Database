@@ -198,6 +198,37 @@ _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'not recognized',
     'not recognised',
 )
+
+
+def _license_candidate_sort_key(path: str) -> tuple[int, int, str]:
+    """Return a priority tuple that favours genuine Vertica license files."""
+
+    lower = path.lower()
+
+    # Prefer explicitly known Vertica Community Edition license paths regardless
+    # of discovery order.  These locations historically stored the bundled CE
+    # license even as new container images shuffled auxiliary directories.
+    if path in _KNOWN_LICENSE_PATH_CANDIDATES:
+        priority = 0
+    # Next, prioritise files that reside in Vertica's dedicated ``license``
+    # directories to avoid unrelated third-party ``LICENSE`` documents that also
+    # live under ``/opt/vertica`` (for example, Python package metadata).
+    elif '/share/license/' in lower or '/config/license' in lower:
+        priority = 1
+    # Explicit Vertica-specific filenames (``*.license``/``*.lic``/``*.dat``/``*.key``)
+    # are stronger signals than generic text documents.
+    elif lower.endswith(('.license', '.lic', '.dat', '.key')):
+        priority = 2
+    # Any remaining candidates that still contain ``vertica`` in the path are
+    # more plausible than unrelated system licenses.
+    elif 'vertica' in lower:
+        priority = 3
+    else:
+        priority = 4
+
+    # Within each bucket prefer shorter paths to stabilise ordering while still
+    # considering the raw path as a final tiebreaker.
+    return (priority, len(path), lower)
 # Some Vertica container revisions no longer expose dedicated admintools license
 # sub-commands and instead expect callers to supply the bundled Community
 # Edition license file directly to ``create_db``.  Include a set of known
@@ -2939,7 +2970,7 @@ done
                 log(missing_cli_message)
                 break
 
-    return candidates
+    return sorted(candidates, key=_license_candidate_sort_key)
 
 
 def _install_vertica_license(container: str) -> bool:
