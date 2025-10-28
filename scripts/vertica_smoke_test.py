@@ -1669,6 +1669,31 @@ def _docker_exec_prefer_container_admin(
     return last_result
 
 
+def _docker_exec_root_shell(
+    container: str,
+    script: str,
+    missing_cli_message: str,
+) -> Optional[subprocess.CompletedProcess[str]]:
+    """Run ``script`` inside ``container`` as ``root`` using ``/bin/sh``."""
+
+    try:
+        result = subprocess.run(
+            ['docker', 'exec', '--user', '0', container, 'sh', '-c', script],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log(missing_cli_message)
+        return None
+
+    if result.stdout:
+        log(result.stdout.rstrip())
+    if result.stderr:
+        log(f'[stderr] {result.stderr.rstrip()}')
+
+    return result
+
+
 def _admintools_license_command_variants(
     action: str,
     *,
@@ -2997,6 +3022,12 @@ def _install_vertica_license(container: str) -> bool:
         combined = f"{result.stdout}\n{result.stderr}".lower()
 
         if any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
+            if _deploy_vertica_license_fallback(container, path):
+                log(
+                    'admintools does not support the legacy install_license tool; '
+                    'deployed license via fallback locations'
+                )
+                return True
             log(
                 'admintools does not support the legacy install_license tool; '
                 'skipping in-container license installation'
@@ -3013,6 +3044,56 @@ def _install_vertica_license(container: str) -> bool:
 
     log('Failed to install Vertica license using discovered files')
     return False
+
+
+_VERTICA_LICENSE_FALLBACK_PATHS: tuple[str, ...] = (
+    '/opt/vertica/config/license.dat',
+    '/opt/vertica/config/license.key',
+    '/data/vertica/config/license.dat',
+    '/data/vertica/config/license.key',
+)
+
+
+def _deploy_vertica_license_fallback(container: str, source_path: str) -> bool:
+    """Copy ``source_path`` to known Vertica license destinations inside ``container``."""
+
+    missing_cli_message = (
+        'Docker CLI is not available while deploying Vertica license fallback'
+    )
+
+    quoted_source = shlex.quote(source_path)
+    deployed = False
+
+    for destination in _VERTICA_LICENSE_FALLBACK_PATHS:
+        quoted_destination = shlex.quote(destination)
+        command = (
+            f'install -D -m 0644 {quoted_source} {quoted_destination}'
+        )
+        result = _docker_exec_root_shell(container, command, missing_cli_message)
+        if result is None:
+            return False
+        if result.returncode != 0:
+            log(
+                'Failed to copy Vertica license from '
+                f'{source_path} to {destination}'
+            )
+            continue
+
+        chown_result = _docker_exec_root_shell(
+            container,
+            f'chown dbadmin:dbadmin {quoted_destination}',
+            missing_cli_message,
+        )
+        if chown_result is None:
+            return False
+        if chown_result.returncode != 0:
+            log(
+                'Failed to adjust ownership on '
+                f'{destination} after deploying Vertica license'
+            )
+        deployed = True
+
+    return deployed
 
 
 def _ensure_vertica_license_installed(container: str) -> bool:
