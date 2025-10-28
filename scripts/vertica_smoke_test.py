@@ -3054,7 +3054,12 @@ _VERTICA_LICENSE_FALLBACK_PATHS: tuple[str, ...] = (
 )
 
 
-def _deploy_vertica_license_fallback(container: str, source_path: str) -> bool:
+def _deploy_vertica_license_fallback(
+    container: str,
+    source_path: str,
+    *,
+    extra_destinations: tuple[str, ...] = (),
+) -> bool:
     """Copy ``source_path`` to known Vertica license destinations inside ``container``."""
 
     missing_cli_message = (
@@ -3064,11 +3069,13 @@ def _deploy_vertica_license_fallback(container: str, source_path: str) -> bool:
     quoted_source = shlex.quote(source_path)
     deployed = False
 
-    for destination in _VERTICA_LICENSE_FALLBACK_PATHS:
+    destinations = list(
+        dict.fromkeys((*_VERTICA_LICENSE_FALLBACK_PATHS, *extra_destinations))
+    )
+
+    for destination in destinations:
         quoted_destination = shlex.quote(destination)
-        command = (
-            f'install -D -m 0644 {quoted_source} {quoted_destination}'
-        )
+        command = f'install -D -m 0644 {quoted_source} {quoted_destination}'
         result = _docker_exec_root_shell(container, command, missing_cli_message)
         if result is None:
             return False
@@ -3094,6 +3101,23 @@ def _deploy_vertica_license_fallback(container: str, source_path: str) -> bool:
         deployed = True
 
     return deployed
+
+
+_LICENSE_ERROR_PATH_PATTERN = re.compile(r'/((?:opt|data)/vertica/[^\s"\']+)')
+
+
+def _extract_license_error_paths(message: str) -> tuple[str, ...]:
+    """Return unique Vertica license paths extracted from ``message``."""
+
+    if not message:
+        return ()
+
+    candidates = []
+    for match in _LICENSE_ERROR_PATH_PATTERN.finditer(message):
+        path = '/' + match.group(1)
+        if path not in candidates:
+            candidates.append(path)
+    return tuple(candidates)
 
 
 def _ensure_vertica_license_installed(container: str) -> bool:
@@ -3221,7 +3245,8 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
     if result is None:
         return False
 
-    combined = f"{result.stdout}\n{result.stderr}".lower()
+    raw_output = f"{result.stdout}\n{result.stderr}"
+    combined = raw_output.lower()
     license_error = 'license' in combined and (
         'not been installed' in combined or 'no license' in combined
     )
@@ -3231,12 +3256,40 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
             'Vertica reported that no license is installed while creating '
             'the database; attempting to install the default license'
         )
+        error_paths = _extract_license_error_paths(raw_output)
         if license_verified or _ensure_vertica_license_installed(container):
             log('Retrying Vertica database creation after installing license')
             retry_result = _run_create()
             if retry_result is not None and retry_result.returncode == 0:
                 log('Requested Vertica database creation inside container; waiting for recovery')
                 return True
+
+        if error_paths and license_candidates:
+            log(
+                'Attempting to seed Vertica license using paths reported in '
+                'admintools output'
+            )
+            seeded = False
+            for candidate in license_candidates:
+                if _deploy_vertica_license_fallback(
+                    container,
+                    candidate,
+                    extra_destinations=error_paths,
+                ):
+                    seeded = True
+                    log(
+                        'Retrying Vertica database creation after seeding license '
+                        'paths reported by admintools'
+                    )
+                    retry_result = _run_create()
+                    if retry_result is not None and retry_result.returncode == 0:
+                        log(
+                            'Requested Vertica database creation inside container; '
+                            'waiting for recovery'
+                        )
+                        return True
+            if seeded:
+                log('Vertica license seeding did not resolve create_db failure; continuing')
 
         for path in license_candidates:
             log(f'Retrying Vertica database creation using license file {path}')
