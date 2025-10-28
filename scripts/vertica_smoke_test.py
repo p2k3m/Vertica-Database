@@ -182,6 +182,20 @@ _EULA_PROMPT_LOG_PATTERNS: tuple[str, ...] = (
 _EULA_PROMPT_LOG_CACHE: dict[str, tuple[float, bool]] = {}
 _EULA_PROMPT_LOG_TTL_SECONDS = 30.0
 
+# Recent Vertica releases replaced the legacy ``admintools`` license management
+# helpers (``list_license`` and ``install_license``) with a consolidated
+# ``license`` target that accepts sub-commands.  Continue to recognise the
+# historic output that indicated an unknown tool while also treating the newer
+# "unknown option" style failures as signals to try an alternate invocation.
+_ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
+    'unknown tool',
+    'unknown option',
+    'unrecognized option',
+    'unrecognised option',
+    'invalid argument',
+    'invalid option',
+)
+
 # Track when ``admintools.conf`` was first observed missing for each Vertica
 # data directory.  Some bootstrap failures repeatedly start the container and
 # leave the uptime below the normal grace period, which previously prevented the
@@ -1600,6 +1614,82 @@ def _docker_exec_prefer_container_admin(
     return last_result
 
 
+def _admintools_license_command_variants(
+    action: str,
+    *,
+    license_path: Optional[str] = None,
+) -> tuple[str, ...]:
+    """Return potential admintools invocations for ``action``.
+
+    ``action`` should be either ``'list'`` or ``'install'``.  Newer Vertica
+    releases route license management through ``admintools -t license`` while
+    older releases continue to provide dedicated helper targets.  Include both
+    styles so callers can transparently fall back without needing to duplicate
+    this command construction logic.
+    """
+
+    if action == 'list':
+        return (
+            '/opt/vertica/bin/admintools -t list_license',
+            '/opt/vertica/bin/admintools -t license -k list',
+            '/opt/vertica/bin/admintools -t license --list',
+        )
+
+    if action == 'install':
+        if license_path is None:
+            raise ValueError('license_path must be provided for install action')
+
+        return (
+            f'/opt/vertica/bin/admintools -t install_license -f {license_path}',
+            f'/opt/vertica/bin/admintools -t license -k install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t license --install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t license --install {license_path}',
+        )
+
+    raise ValueError(f'Unsupported admintools license action: {action}')
+
+
+def _run_admintools_license_command(
+    container: str,
+    commands: tuple[str, ...],
+    missing_cli_message: str,
+    *,
+    allow_root_fallback: bool = True,
+) -> Optional[subprocess.CompletedProcess[str]]:
+    """Execute possible admintools license commands until one succeeds.
+
+    Returns the first ``subprocess.CompletedProcess`` whose exit status is zero
+    or whose failure does not resemble an "unknown command" style response.  If
+    every variant fails with an unknown-command pattern the last result is
+    returned so callers can surface a helpful log message.
+    """
+
+    last_result: Optional[subprocess.CompletedProcess[str]] = None
+
+    for command in commands:
+        result = _docker_exec_prefer_container_admin(
+            container,
+            ['sh', '-c', command],
+            missing_cli_message,
+            allow_root_fallback=allow_root_fallback,
+        )
+
+        if result is None:
+            return None
+
+        last_result = result
+
+        if result.returncode == 0:
+            return result
+
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+
+        if not any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
+            return result
+
+    return last_result
+
+
 def _align_container_path_identity(container: str, path: str, friendly_name: str) -> tuple[bool, bool]:
     """Attempt to align ``path`` ownership with ``dbadmin`` inside ``container``.
 
@@ -2779,9 +2869,9 @@ def _install_vertica_license(container: str) -> bool:
     for path in license_paths:
         quoted = shlex.quote(path)
         log(f'Attempting to install Vertica license from {path}')
-        result = _docker_exec_prefer_container_admin(
+        result = _run_admintools_license_command(
             container,
-            ['sh', '-c', f"/opt/vertica/bin/admintools -t install_license -f {quoted}"],
+            _admintools_license_command_variants('install', license_path=quoted),
             'Docker CLI is not available while installing Vertica license',
             allow_root_fallback=False,
         )
@@ -2791,7 +2881,7 @@ def _install_vertica_license(container: str) -> bool:
 
         combined = f"{result.stdout}\n{result.stderr}".lower()
 
-        if 'unknown tool' in combined:
+        if any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
             log(
                 'admintools does not support the legacy install_license tool; '
                 'skipping in-container license installation'
@@ -2813,9 +2903,9 @@ def _install_vertica_license(container: str) -> bool:
 def _ensure_vertica_license_installed(container: str) -> bool:
     """Ensure that a Vertica license is installed inside ``container``."""
 
-    status = _docker_exec_prefer_container_admin(
+    status = _run_admintools_license_command(
         container,
-        ['sh', '-c', '/opt/vertica/bin/admintools -t list_license'],
+        _admintools_license_command_variants('list'),
         'Docker CLI is not available while checking Vertica license status',
     )
 
@@ -2824,7 +2914,7 @@ def _ensure_vertica_license_installed(container: str) -> bool:
 
     combined = f"{status.stdout}\n{status.stderr}".lower()
 
-    if 'unknown tool' in combined:
+    if any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
         log(
             'admintools does not provide the list_license tool; relying on database '
             'creation to supply the license'
@@ -2840,9 +2930,9 @@ def _ensure_vertica_license_installed(container: str) -> bool:
     if not _install_vertica_license(container):
         return False
 
-    verification = _docker_exec_prefer_container_admin(
+    verification = _run_admintools_license_command(
         container,
-        ['sh', '-c', '/opt/vertica/bin/admintools -t list_license'],
+        _admintools_license_command_variants('list'),
         'Docker CLI is not available while verifying Vertica license status',
     )
 

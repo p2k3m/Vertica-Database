@@ -203,6 +203,51 @@ def test_accept_vertica_eula_success(monkeypatch):
     assert any('Recorded Vertica EULA acceptance' in message for message in logs)
 
 
+def test_run_admintools_license_command_falls_back(monkeypatch):
+    commands: list[str] = []
+
+    responses = [
+        SimpleNamespace(returncode=1, stdout='', stderr='Unknown tool list_license'),
+        SimpleNamespace(returncode=0, stdout='License installed', stderr=''),
+    ]
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        commands.append(command[-1])
+        return responses.pop(0)
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    result = smoke._run_admintools_license_command(
+        'vertica_ce',
+        smoke._admintools_license_command_variants('list'),
+        'missing docker',
+    )
+
+    assert result is not None
+    assert result.returncode == 0
+    assert commands[0].endswith('list_license')
+    assert commands[1].endswith('license -k list')
+
+
+def test_install_vertica_license_uses_fallback(monkeypatch):
+    commands: list[str] = []
+
+    def fake_discover(_container: str) -> list[str]:
+        return ['/opt/vertica/config/license.dat']
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        commands.append(command[-1])
+        if 'install_license' in command[-1]:
+            return SimpleNamespace(returncode=1, stdout='', stderr='Unknown tool install_license')
+        return SimpleNamespace(returncode=0, stdout='Installed', stderr='')
+
+    monkeypatch.setattr(smoke, '_discover_container_license_files', fake_discover)
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    assert smoke._install_vertica_license('vertica_ce') is True
+    assert any('license -k install' in cmd for cmd in commands)
+
+
 def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
     current_time = {'value': 0.0}
 
