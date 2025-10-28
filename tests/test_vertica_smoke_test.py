@@ -938,6 +938,30 @@ def test_health_log_indicates_missing_database():
     )
 
 
+def test_container_logs_indicate_missing_database(monkeypatch):
+    results = [
+        SimpleNamespace(
+            returncode=0,
+            stdout='Database VMart is not defined. Defined databases []',
+            stderr='',
+        ),
+        SimpleNamespace(returncode=1, stdout='', stderr=''),
+        SimpleNamespace(returncode=0, stdout='All good here', stderr=''),
+    ]
+
+    def fake_run(command, capture_output, text):
+        assert command == ['docker', 'logs', '--tail', '200', 'vertica_ce']
+        assert capture_output is True
+        assert text is True
+        return results.pop(0)
+
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    assert smoke._container_logs_indicate_missing_database('vertica_ce', 'VMart') is True
+    assert smoke._container_logs_indicate_missing_database('vertica_ce', 'VMart') is False
+    assert smoke._container_logs_indicate_missing_database('vertica_ce', 'VMart') is False
+
+
 def test_ensure_vertica_creates_database_when_missing(monkeypatch):
     current_time = {'value': 0.0}
 
@@ -987,6 +1011,69 @@ def test_ensure_vertica_creates_database_when_missing(monkeypatch):
     monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 600.0)
     monkeypatch.setattr(smoke, '_docker_inspect', fake_docker_inspect)
     monkeypatch.setattr(smoke, '_docker_health_log', fake_health_log)
+    monkeypatch.setattr(smoke, '_log_health_log_entries', lambda container, count: count)
+    monkeypatch.setattr(smoke, '_attempt_vertica_database_creation', fake_attempt_creation)
+    monkeypatch.setattr(smoke, '_container_is_responding', lambda: False)
+    monkeypatch.setattr(smoke, '_container_reports_eula_prompt', lambda container: False)
+    monkeypatch.setattr(smoke, '_accept_vertica_eula', lambda container: False)
+    monkeypatch.setattr(smoke, 'run_command', lambda command: None)
+    monkeypatch.setattr(smoke, 'log', lambda message: None)
+    monkeypatch.setattr(smoke.time, 'time', fake_time)
+    monkeypatch.setattr(smoke.time, 'sleep', fake_sleep)
+    monkeypatch.setattr(smoke, 'UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS', 0.0)
+
+    smoke.ensure_vertica_container_running(timeout=120.0, compose_timeout=0.0)
+
+    assert creation_calls
+    container, database, observed_time = creation_calls[0]
+    assert container == 'vertica_ce'
+    assert database == smoke.DB_NAME
+    assert observed_time >= 0.0
+
+
+def test_ensure_vertica_creates_database_when_logs_indicate_missing(monkeypatch):
+    current_time = {'value': 0.0}
+
+    def fake_time() -> float:
+        return current_time['value']
+
+    def fake_sleep(seconds: float) -> None:
+        current_time['value'] += seconds
+
+    health_states = iter(['starting', 'starting', 'healthy'])
+
+    def fake_docker_inspect(container: str, template: str) -> Optional[str]:
+        if template == '{{.State.Status}}':
+            return 'running'
+        if template == '{{if .State.Health}}{{.State.Health.Status}}{{end}}':
+            return next(health_states)
+        if template == '{{.RestartCount}}':
+            return '0'
+        raise AssertionError(f'unexpected template: {template}')
+
+    detection_calls = {'count': 0}
+
+    def fake_logs_missing(container: str, database: str, tail: int = 200) -> bool:
+        detection_calls['count'] += 1
+        return detection_calls['count'] <= 2
+
+    creation_calls: list[tuple[str, str, float]] = []
+
+    def fake_attempt_creation(container: str, database: str) -> bool:
+        creation_calls.append((container, database, current_time['value']))
+        return True
+
+    monkeypatch.setattr(smoke, '_ensure_docker_compose_cli', lambda: None)
+    monkeypatch.setattr(smoke, '_sanitize_vertica_data_directories', lambda: None)
+    monkeypatch.setattr(smoke, '_ensure_container_admintools_conf_readable', lambda container: False)
+    monkeypatch.setattr(smoke, '_reset_vertica_data_directories', lambda: False)
+    monkeypatch.setattr(smoke, '_compose_file', lambda: Path('compose.yml'))
+    monkeypatch.setattr(smoke, '_ensure_ecr_login_if_needed', lambda path: None)
+    monkeypatch.setattr(smoke, '_compose_up', lambda path, force_recreate=False: None)
+    monkeypatch.setattr(smoke, '_container_uptime_seconds', lambda container: 600.0)
+    monkeypatch.setattr(smoke, '_docker_inspect', fake_docker_inspect)
+    monkeypatch.setattr(smoke, '_docker_health_log', lambda container: [])
+    monkeypatch.setattr(smoke, '_container_logs_indicate_missing_database', fake_logs_missing)
     monkeypatch.setattr(smoke, '_log_health_log_entries', lambda container, count: count)
     monkeypatch.setattr(smoke, '_attempt_vertica_database_creation', fake_attempt_creation)
     monkeypatch.setattr(smoke, '_container_is_responding', lambda: False)
