@@ -2789,11 +2789,19 @@ def _install_vertica_license(container: str) -> bool:
         if result is None:
             return False
 
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+
+        if 'unknown tool' in combined:
+            log(
+                'admintools does not support the legacy install_license tool; '
+                'skipping in-container license installation'
+            )
+            return False
+
         if result.returncode == 0:
             log(f'Successfully installed Vertica license from {path}')
             return True
 
-        combined = f"{result.stdout}\n{result.stderr}".lower()
         if 'already installed' in combined or 'already licensed' in combined:
             log('Vertica license already installed according to admintools output')
             return True
@@ -2814,8 +2822,16 @@ def _ensure_vertica_license_installed(container: str) -> bool:
     if status is None:
         return False
 
+    combined = f"{status.stdout}\n{status.stderr}".lower()
+
+    if 'unknown tool' in combined:
+        log(
+            'admintools does not provide the list_license tool; relying on database '
+            'creation to supply the license'
+        )
+        return False
+
     if status.returncode == 0:
-        combined = f"{status.stdout}\n{status.stderr}".lower()
         if 'no license' not in combined and 'not been installed' not in combined:
             return True
 
@@ -2864,48 +2880,68 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         f"{database!r} inside container {container}"
     )
 
-    command = (
+    base_command = (
         "/opt/vertica/bin/admintools -t create_db -s "
         f"{shlex.quote(host)} -d {shlex.quote(database)} -p {shlex.quote(password)}"
     )
-    script = 'set -e\n' + command
 
-    result = _docker_exec_prefer_container_admin(
-        container,
-        ['sh', '-c', script],
-        'Docker CLI is not available while creating Vertica database',
-    )
+    def _run_create(license_path: Optional[str] = None) -> Optional[subprocess.CompletedProcess[str]]:
+        command = base_command
+        if license_path:
+            command += f" -l {shlex.quote(license_path)}"
+        script = 'set -e\n' + command
+        return _docker_exec_prefer_container_admin(
+            container,
+            ['sh', '-c', script],
+            'Docker CLI is not available while creating Vertica database',
+        )
+
+    result = _run_create()
     if result is None:
         return False
 
-    if result.returncode != 0:
-        combined = f"{result.stdout}\n{result.stderr}".lower()
-        if 'license' in combined and (
-            'not been installed' in combined or 'no license' in combined
-        ):
-            log(
-                'Vertica reported that no license is installed while creating '
-                'the database; attempting to install the default license'
-            )
-            if _ensure_vertica_license_installed(container):
-                log('Retrying Vertica database creation after installing license')
-                result = _docker_exec_prefer_container_admin(
-                    container,
-                    ['sh', '-c', script],
-                    'Docker CLI is not available while creating Vertica database',
-                )
-                if result is not None and result.returncode == 0:
+    if result.returncode == 0:
+        log('Requested Vertica database creation inside container; waiting for recovery')
+        return True
+
+    combined = f"{result.stdout}\n{result.stderr}".lower()
+    license_error = 'license' in combined and (
+        'not been installed' in combined or 'no license' in combined
+    )
+
+    if license_error:
+        log(
+            'Vertica reported that no license is installed while creating '
+            'the database; attempting to install the default license'
+        )
+        if _ensure_vertica_license_installed(container):
+            log('Retrying Vertica database creation after installing license')
+            retry_result = _run_create()
+            if retry_result is not None and retry_result.returncode == 0:
+                log('Requested Vertica database creation inside container; waiting for recovery')
+                return True
+
+        license_paths = _discover_container_license_files(container)
+        for path in license_paths:
+            log(f'Retrying Vertica database creation using license file {path}')
+            retry_result = _run_create(path)
+            if retry_result is not None:
+                if retry_result.returncode == 0:
                     log('Requested Vertica database creation inside container; waiting for recovery')
                     return True
+                combined_retry = f"{retry_result.stdout}\n{retry_result.stderr}".lower()
+                if 'unknown option' in combined_retry and '-l' in combined_retry:
+                    log(
+                        'admintools reported that the create_db command does not '
+                        'support the --license option; stopping license retries'
+                    )
+                    break
 
-        log(
-            'Vertica database creation command exited with '
-            f'code {result.returncode}; continuing recovery attempts'
-        )
-        return False
-
-    log('Requested Vertica database creation inside container; waiting for recovery')
-    return True
+    log(
+        'Vertica database creation command exited with '
+        f'code {result.returncode}; continuing recovery attempts'
+    )
+    return False
 
 
 _DOCKER_TIMESTAMP_PATTERN = re.compile(
