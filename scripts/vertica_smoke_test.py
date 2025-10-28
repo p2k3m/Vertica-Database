@@ -2855,13 +2855,13 @@ def _discover_container_license_files(container: str) -> list[str]:
     """Return potential Vertica license paths inside ``container``."""
 
     search_script = r"""
-search_dirs="/opt/vertica/config /opt/vertica/config/share /opt/vertica/config/licenses \
-/opt/vertica/config/license /opt/vertica/share/license /opt/vertica/share/licenses \
-/data/vertica /data/vertica/config"
-for dir in $search_dirs; do
+search_roots="/opt/vertica /opt/vertica/config /opt/vertica/share /data/vertica /data/vertica/config"
+for dir in $search_roots; do
   if [ -d "$dir" ]; then
-    find "$dir" -maxdepth 3 -type f \
-      \( -iname '*license*.dat' -o -iname '*license*.lic' -o -iname '*license*.txt' \) \
+    find "$dir" -maxdepth 5 -type f \
+      \( -iname '*license*.dat' -o -iname '*license*.lic' -o -iname '*license*.txt' \
+         -o -iname '*license*.key' -o -iname '*license*.xml' -o -iname '*license*.json' \
+         -o -iname '*eula*.txt' -o -iname '*eula*.lic' -o -iname '*eula*.dat' \) \
       -print 2>/dev/null
   fi
 done
