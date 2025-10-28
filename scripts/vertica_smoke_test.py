@@ -189,11 +189,14 @@ _EULA_PROMPT_LOG_TTL_SECONDS = 30.0
 # "unknown option" style failures as signals to try an alternate invocation.
 _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'unknown tool',
+    'unknown command',
     'unknown option',
     'unrecognized option',
     'unrecognised option',
     'invalid argument',
     'invalid option',
+    'not recognized',
+    'not recognised',
 )
 
 # Track when ``admintools.conf`` was first observed missing for each Vertica
@@ -1633,6 +1636,16 @@ def _admintools_license_command_variants(
             '/opt/vertica/bin/admintools -t list_license',
             '/opt/vertica/bin/admintools -t license -k list',
             '/opt/vertica/bin/admintools -t license --list',
+            '/opt/vertica/bin/admintools -t license --action list',
+            '/opt/vertica/bin/admintools -t db_license -k list',
+            '/opt/vertica/bin/admintools -t db_license --list',
+            '/opt/vertica/bin/admintools -t db_license --action list',
+            '/opt/vertica/bin/admintools -t manage_license -k list',
+            '/opt/vertica/bin/admintools -t manage_license --list',
+            '/opt/vertica/bin/admintools -t manage_license --action list',
+            '/opt/vertica/bin/admintools -t license_manager -k list',
+            '/opt/vertica/bin/admintools -t license_manager --list',
+            '/opt/vertica/bin/admintools -t license_manager --action list',
         )
 
     if action == 'install':
@@ -1644,6 +1657,23 @@ def _admintools_license_command_variants(
             f'/opt/vertica/bin/admintools -t license -k install -f {license_path}',
             f'/opt/vertica/bin/admintools -t license --install -f {license_path}',
             f'/opt/vertica/bin/admintools -t license --install {license_path}',
+            f'/opt/vertica/bin/admintools -t license --action install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t license --action install {license_path}',
+            f'/opt/vertica/bin/admintools -t db_license -k install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t db_license --install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t db_license --install {license_path}',
+            f'/opt/vertica/bin/admintools -t db_license --action install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t db_license --action install {license_path}',
+            f'/opt/vertica/bin/admintools -t manage_license -k install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t manage_license --install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t manage_license --install {license_path}',
+            f'/opt/vertica/bin/admintools -t manage_license --action install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t manage_license --action install {license_path}',
+            f'/opt/vertica/bin/admintools -t license_manager -k install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t license_manager --install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t license_manager --install {license_path}',
+            f'/opt/vertica/bin/admintools -t license_manager --action install -f {license_path}',
+            f'/opt/vertica/bin/admintools -t license_manager --action install {license_path}',
         )
 
     raise ValueError(f'Unsupported admintools license action: {action}')
