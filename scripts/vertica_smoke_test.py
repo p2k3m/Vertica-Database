@@ -2657,6 +2657,32 @@ def _health_log_indicates_missing_database(
     return False
 
 
+def _container_logs_indicate_missing_database(
+    container: str, database: str, tail: int = 200
+) -> bool:
+    """Return ``True`` when container logs reference a missing database."""
+
+    try:
+        result = subprocess.run(
+            ['docker', 'logs', '--tail', str(tail), container],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return False
+
+    if result.returncode != 0:
+        return False
+
+    database_token = f'database {database}'.lower()
+    combined_output = '\n'.join(filter(None, [result.stdout, result.stderr]))
+    if not combined_output:
+        return False
+
+    normalized = combined_output.lower()
+    return database_token in normalized and 'not defined' in normalized
+
+
 def _log_container_tail(container: str, tail: int = 200) -> None:
     """Log the most recent ``tail`` lines of stdout/stderr from ``container``."""
 
@@ -3920,9 +3946,15 @@ def ensure_vertica_container_running(
 
             degraded_duration = now - degraded_observed_at
             state_is_unhealthy = health == 'unhealthy'
-            missing_database_detected = _health_log_indicates_missing_database(
-                health_entries, DB_NAME
-            )
+            missing_database_reason: Optional[str] = None
+            if _health_log_indicates_missing_database(health_entries, DB_NAME):
+                missing_database_reason = 'health checks'
+            elif (
+                status == 'running'
+                and not database_creation_attempted
+                and _container_logs_indicate_missing_database('vertica_ce', DB_NAME)
+            ):
+                missing_database_reason = 'container logs'
 
             if (
                 degraded_duration >= 120
@@ -3944,14 +3976,20 @@ def ensure_vertica_container_running(
 
             if (
                 status == 'running'
-                and missing_database_detected
+                and missing_database_reason is not None
                 and not database_creation_attempted
             ):
                 if not database_missing_logged:
-                    log(
-                        'Vertica health checks indicate the configured database '
-                        f"{DB_NAME!r} is missing; attempting to create it inside the container"
-                    )
+                    if missing_database_reason == 'health checks':
+                        log(
+                            'Vertica health checks indicate the configured database '
+                            f"{DB_NAME!r} is missing; attempting to create it inside the container"
+                        )
+                    else:
+                        log(
+                            'Vertica container logs indicate the configured database '
+                            f"{DB_NAME!r} is missing; attempting to create it inside the container"
+                        )
                     database_missing_logged = True
                 if _attempt_vertica_database_creation('vertica_ce', DB_NAME):
                     database_creation_attempted = True
