@@ -198,6 +198,27 @@ _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'not recognized',
     'not recognised',
 )
+# Some Vertica container revisions no longer expose dedicated admintools license
+# sub-commands and instead expect callers to supply the bundled Community
+# Edition license file directly to ``create_db``.  Include a set of known
+# absolute paths that historically stored the community license so the smoke
+# test can still discover it even when ``find`` misses the location (for
+# example, due to deeply nested directory structures or symlinks).
+_KNOWN_LICENSE_PATH_CANDIDATES: tuple[str, ...] = (
+    '/opt/vertica/config/license.dat',
+    '/opt/vertica/config/license.key',
+    '/opt/vertica/config/share/license.dat',
+    '/opt/vertica/config/share/license.key',
+    '/opt/vertica/config/share/license/license.dat',
+    '/opt/vertica/config/share/license/license.key',
+    '/opt/vertica/config/share/license/VerticaCE_AWS.license.key',
+    '/opt/vertica/config/share/license/Vertica_CE.license.key',
+    '/opt/vertica/config/share/license/Vertica_Community_Edition.license.key',
+    '/opt/vertica/share/license.dat',
+    '/opt/vertica/share/license.key',
+    '/opt/vertica/share/license/vertica.license',
+    '/opt/vertica/share/license/Vertica_CE.license.key',
+)
 
 # Track when ``admintools.conf`` was first observed missing for each Vertica
 # data directory.  Some bootstrap failures repeatedly start the container and
@@ -2855,14 +2876,31 @@ def _discover_container_license_files(container: str) -> list[str]:
     """Return potential Vertica license paths inside ``container``."""
 
     search_script = r"""
-search_roots="/opt/vertica /opt/vertica/config /opt/vertica/share /data/vertica /data/vertica/config"
+search_roots="/opt/vertica /opt/vertica/config /opt/vertica/config/share /opt/vertica/share /opt/vertica/packages /data/vertica /data/vertica/config"
 for dir in $search_roots; do
   if [ -d "$dir" ]; then
-    find "$dir" -maxdepth 5 -type f \
+    find "$dir" -maxdepth 8 -type f \
       \( -iname '*license*.dat' -o -iname '*license*.lic' -o -iname '*license*.txt' \
          -o -iname '*license*.key' -o -iname '*license*.xml' -o -iname '*license*.json' \
+         -o -iname '*license*.cfg' -o -iname '*license*.conf' \
          -o -iname '*eula*.txt' -o -iname '*eula*.lic' -o -iname '*eula*.dat' \) \
       -print 2>/dev/null
+  fi
+done
+
+for pattern in /opt/vertica/*.lic /opt/vertica/*.dat /opt/vertica/*.key \
+               /opt/vertica/config/*.lic /opt/vertica/config/*.dat /opt/vertica/config/*.key \
+               /opt/vertica/config/share/license/* /opt/vertica/share/license/*; do
+  for candidate in $pattern; do
+    if [ -f "$candidate" ]; then
+      printf '%s\n' "$candidate"
+    fi
+  done
+done
+
+for candidate in "${VERTICA_DB_LICENSE:-}" "${VERTICA_LICENSE_FILE:-}" "${VERTICA_LICENSE_PATH:-}"; do
+  if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+    printf '%s\n' "$candidate"
   fi
 done
 """
@@ -2884,6 +2922,22 @@ done
             continue
         seen.add(normalized)
         candidates.append(normalized)
+
+    if shutil.which('docker') is not None:
+        missing_cli_message = 'Docker CLI is not available while probing known Vertica license paths'
+        for path in _KNOWN_LICENSE_PATH_CANDIDATES:
+            quoted = shlex.quote(path)
+            check = subprocess.run(
+                ['docker', 'exec', '--user', '0', container, 'sh', '-c', f'test -r {quoted}'],
+                capture_output=True,
+                text=True,
+            )
+            if check.returncode == 0 and path not in seen:
+                candidates.append(path)
+                seen.add(path)
+            elif check.returncode not in (0, 1):
+                log(missing_cli_message)
+                break
 
     return candidates
 
@@ -2995,7 +3049,8 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         or '127.0.0.1'
     )
 
-    _ensure_vertica_license_installed(container)
+    license_candidates = _discover_container_license_files(container)
+    license_verified = _ensure_vertica_license_installed(container)
 
     log(
         'Invoking Vertica admintools to create database '
@@ -3018,13 +3073,41 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
             'Docker CLI is not available while creating Vertica database',
         )
 
-    result = _run_create()
+    initial_attempts: list[Optional[str]] = []
+
+    if not license_verified and license_candidates:
+        initial_attempts.append(license_candidates[0])
+
+    initial_attempts.append(None)
+
+    result: Optional[subprocess.CompletedProcess[str]] = None
+    attempted: set[Optional[str]] = set()
+
+    for license_path in initial_attempts:
+        if license_path in attempted:
+            continue
+        attempted.add(license_path)
+        result = _run_create(license_path)
+        if result is None:
+            return False
+        if result.returncode == 0:
+            log('Requested Vertica database creation inside container; waiting for recovery')
+            return True
+        combined_attempt = f"{result.stdout}\n{result.stderr}".lower()
+        if (
+            license_path is not None
+            and 'unknown option' in combined_attempt
+            and '-l' in combined_attempt
+        ):
+            log(
+                'admintools reported that the create_db command does not support '
+                'the --license option; retrying without explicit license path'
+            )
+            continue
+        break
+
     if result is None:
         return False
-
-    if result.returncode == 0:
-        log('Requested Vertica database creation inside container; waiting for recovery')
-        return True
 
     combined = f"{result.stdout}\n{result.stderr}".lower()
     license_error = 'license' in combined and (
@@ -3036,15 +3119,14 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
             'Vertica reported that no license is installed while creating '
             'the database; attempting to install the default license'
         )
-        if _ensure_vertica_license_installed(container):
+        if license_verified or _ensure_vertica_license_installed(container):
             log('Retrying Vertica database creation after installing license')
             retry_result = _run_create()
             if retry_result is not None and retry_result.returncode == 0:
                 log('Requested Vertica database creation inside container; waiting for recovery')
                 return True
 
-        license_paths = _discover_container_license_files(container)
-        for path in license_paths:
+        for path in license_candidates:
             log(f'Retrying Vertica database creation using license file {path}')
             retry_result = _run_create(path)
             if retry_result is not None:

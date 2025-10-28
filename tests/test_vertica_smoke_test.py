@@ -248,6 +248,29 @@ def test_install_vertica_license_uses_fallback(monkeypatch):
     assert any('license -k install' in cmd for cmd in commands)
 
 
+def test_discover_license_includes_known_candidates(monkeypatch):
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        assert container == 'vertica_ce'
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    def fake_which(tool: str) -> Optional[str]:
+        return '/usr/bin/docker' if tool == 'docker' else None
+
+    def fake_run(args, capture_output, text):
+        command = args[-1]
+        if 'license.dat' in command:
+            return SimpleNamespace(returncode=0, stdout='', stderr='')
+        return SimpleNamespace(returncode=1, stdout='', stderr='')
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+    monkeypatch.setattr(smoke.shutil, 'which', fake_which)
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    candidates = smoke._discover_container_license_files('vertica_ce')
+
+    assert '/opt/vertica/config/license.dat' in candidates
+
+
 def test_ensure_vertica_license_installed_disables_root_fallback(monkeypatch):
     responses = [
         SimpleNamespace(returncode=0, stdout='No license installed', stderr=''),
@@ -270,6 +293,43 @@ def test_ensure_vertica_license_installed_disables_root_fallback(monkeypatch):
 
     assert smoke._ensure_vertica_license_installed('vertica_ce') is True
     assert observed == [False, False]
+
+
+def test_attempt_creation_prefers_license_candidate(monkeypatch):
+    commands: list[str] = []
+
+    def fake_fetch_env(container: str) -> dict[str, str]:
+        assert container == 'vertica_ce'
+        return {'VERTICA_DB_PASSWORD': 'secret'}
+
+    def fake_discover(container: str) -> list[str]:
+        return ['/opt/vertica/config/license.key']
+
+    def fake_ensure(container: str) -> bool:
+        return False
+
+    responses = [
+        SimpleNamespace(returncode=1, stdout='', stderr='Unknown option --license'),
+        SimpleNamespace(returncode=0, stdout='Created', stderr=''),
+    ]
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        commands.append(command[-1])
+        return responses.pop(0)
+
+    monkeypatch.setattr(smoke, '_fetch_container_env', fake_fetch_env)
+    monkeypatch.setattr(smoke, '_discover_container_license_files', fake_discover)
+    monkeypatch.setattr(smoke, '_ensure_vertica_license_installed', fake_ensure)
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is True
+    assert any(
+        '-l /opt/vertica/config/license.key' in cmd.replace('\n', ' ')
+        for cmd in commands
+    )
+    assert commands[-1].splitlines()[-1].startswith(
+        '/opt/vertica/bin/admintools -t create_db'
+    )
 
 
 def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
