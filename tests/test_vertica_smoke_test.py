@@ -271,6 +271,39 @@ def test_discover_license_includes_known_candidates(monkeypatch):
     assert '/opt/vertica/config/license.dat' in candidates
 
 
+def test_discover_license_prioritises_known_paths(monkeypatch):
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        assert container == 'vertica_ce'
+        stdout = '\n'.join(
+            [
+                '/opt/vertica/oss/python3/lib/python3.11/LICENSE.txt',
+                '/opt/vertica/config/share/license/Vertica_CE.license.key',
+            ]
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr='')
+
+    def fake_which(tool: str) -> Optional[str]:
+        return '/usr/bin/docker' if tool == 'docker' else None
+
+    def fake_run(args, capture_output, text):
+        command = args[-1]
+        if 'Vertica_CE.license.key' in command:
+            return SimpleNamespace(returncode=0, stdout='', stderr='')
+        return SimpleNamespace(returncode=1, stdout='', stderr='')
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+    monkeypatch.setattr(smoke.shutil, 'which', fake_which)
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    candidates = smoke._discover_container_license_files('vertica_ce')
+
+    assert candidates[0] in {
+        '/opt/vertica/config/share/license/Vertica_CE.license.key',
+        '/opt/vertica/share/license/Vertica_CE.license.key',
+    }
+    assert candidates[-1] == '/opt/vertica/oss/python3/lib/python3.11/LICENSE.txt'
+
+
 def test_ensure_vertica_license_installed_disables_root_fallback(monkeypatch):
     responses = [
         SimpleNamespace(returncode=0, stdout='No license installed', stderr=''),
