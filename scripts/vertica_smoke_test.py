@@ -2907,6 +2907,7 @@ def _ensure_vertica_license_installed(container: str) -> bool:
         container,
         _admintools_license_command_variants('list'),
         'Docker CLI is not available while checking Vertica license status',
+        allow_root_fallback=False,
     )
 
     if status is None:
@@ -2934,6 +2935,7 @@ def _ensure_vertica_license_installed(container: str) -> bool:
         container,
         _admintools_license_command_variants('list'),
         'Docker CLI is not available while verifying Vertica license status',
+        allow_root_fallback=False,
     )
 
     if verification is None:

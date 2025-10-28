@@ -248,6 +248,30 @@ def test_install_vertica_license_uses_fallback(monkeypatch):
     assert any('license -k install' in cmd for cmd in commands)
 
 
+def test_ensure_vertica_license_installed_disables_root_fallback(monkeypatch):
+    responses = [
+        SimpleNamespace(returncode=0, stdout='No license installed', stderr=''),
+        SimpleNamespace(returncode=0, stdout='License installed', stderr=''),
+    ]
+    observed: list[bool] = []
+
+    def fake_run(
+        container: str,
+        commands: tuple[str, ...],
+        message: str,
+        *,
+        allow_root_fallback: bool,
+    ) -> SimpleNamespace:
+        observed.append(allow_root_fallback)
+        return responses.pop(0)
+
+    monkeypatch.setattr(smoke, '_run_admintools_license_command', fake_run)
+    monkeypatch.setattr(smoke, '_install_vertica_license', lambda container: True)
+
+    assert smoke._ensure_vertica_license_installed('vertica_ce') is True
+    assert observed == [False, False]
+
+
 def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
     current_time = {'value': 0.0}
 
