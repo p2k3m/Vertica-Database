@@ -2731,6 +2731,118 @@ def _fetch_container_env(container: str) -> dict[str, str]:
     return env
 
 
+def _discover_container_license_files(container: str) -> list[str]:
+    """Return potential Vertica license paths inside ``container``."""
+
+    search_script = r"""
+search_dirs="/opt/vertica/config /opt/vertica/config/share /opt/vertica/config/licenses \
+/opt/vertica/config/license /opt/vertica/share/license /opt/vertica/share/licenses \
+/data/vertica /data/vertica/config"
+for dir in $search_dirs; do
+  if [ -d "$dir" ]; then
+    find "$dir" -maxdepth 3 -type f \
+      \( -iname '*license*.dat' -o -iname '*license*.lic' -o -iname '*license*.txt' \) \
+      -print 2>/dev/null
+  fi
+done
+"""
+
+    result = _docker_exec_prefer_container_admin(
+        container,
+        ['sh', '-c', search_script],
+        'Docker CLI is not available while discovering Vertica licenses',
+    )
+
+    if result is None:
+        return []
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for line in result.stdout.splitlines():
+        normalized = line.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        candidates.append(normalized)
+
+    return candidates
+
+
+def _install_vertica_license(container: str) -> bool:
+    """Attempt to install a Vertica license inside ``container``."""
+
+    license_paths = _discover_container_license_files(container)
+    if not license_paths:
+        log('Unable to locate Vertica license files inside the container')
+        return False
+
+    for path in license_paths:
+        quoted = shlex.quote(path)
+        log(f'Attempting to install Vertica license from {path}')
+        result = _docker_exec_prefer_container_admin(
+            container,
+            ['sh', '-c', f"/opt/vertica/bin/admintools -t install_license -f {quoted}"],
+            'Docker CLI is not available while installing Vertica license',
+            allow_root_fallback=False,
+        )
+
+        if result is None:
+            return False
+
+        if result.returncode == 0:
+            log(f'Successfully installed Vertica license from {path}')
+            return True
+
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+        if 'already installed' in combined or 'already licensed' in combined:
+            log('Vertica license already installed according to admintools output')
+            return True
+
+    log('Failed to install Vertica license using discovered files')
+    return False
+
+
+def _ensure_vertica_license_installed(container: str) -> bool:
+    """Ensure that a Vertica license is installed inside ``container``."""
+
+    status = _docker_exec_prefer_container_admin(
+        container,
+        ['sh', '-c', '/opt/vertica/bin/admintools -t list_license'],
+        'Docker CLI is not available while checking Vertica license status',
+    )
+
+    if status is None:
+        return False
+
+    if status.returncode == 0:
+        combined = f"{status.stdout}\n{status.stderr}".lower()
+        if 'no license' not in combined and 'not been installed' not in combined:
+            return True
+
+    log('Vertica license status indicates no license is installed; attempting installation')
+
+    if not _install_vertica_license(container):
+        return False
+
+    verification = _docker_exec_prefer_container_admin(
+        container,
+        ['sh', '-c', '/opt/vertica/bin/admintools -t list_license'],
+        'Docker CLI is not available while verifying Vertica license status',
+    )
+
+    if verification is None:
+        return False
+
+    if verification.returncode == 0:
+        combined = f"{verification.stdout}\n{verification.stderr}".lower()
+        if 'no license' in combined or 'not been installed' in combined:
+            log('Vertica license verification still reports no license installed')
+            return False
+        return True
+
+    return False
+
+
 def _attempt_vertica_database_creation(container: str, database: str) -> bool:
     """Attempt to create ``database`` inside ``container`` using admintools."""
 
@@ -2744,6 +2856,8 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         or env.get('VERTICA_HOST')
         or '127.0.0.1'
     )
+
+    _ensure_vertica_license_installed(container)
 
     log(
         'Invoking Vertica admintools to create database '
@@ -2765,6 +2879,25 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         return False
 
     if result.returncode != 0:
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+        if 'license' in combined and (
+            'not been installed' in combined or 'no license' in combined
+        ):
+            log(
+                'Vertica reported that no license is installed while creating '
+                'the database; attempting to install the default license'
+            )
+            if _ensure_vertica_license_installed(container):
+                log('Retrying Vertica database creation after installing license')
+                result = _docker_exec_prefer_container_admin(
+                    container,
+                    ['sh', '-c', script],
+                    'Docker CLI is not available while creating Vertica database',
+                )
+                if result is not None and result.returncode == 0:
+                    log('Requested Vertica database creation inside container; waiting for recovery')
+                    return True
+
         log(
             'Vertica database creation command exited with '
             f'code {result.returncode}; continuing recovery attempts'
