@@ -304,6 +304,39 @@ def test_install_vertica_license_fallback_failure(monkeypatch):
     assert smoke._install_vertica_license('vertica_ce') is False
 
 
+def test_deploy_vertica_license_fallback_handles_same_file(monkeypatch):
+    align_calls: list[str] = []
+
+    def fake_align(container, path, friendly_name, *, context='admintools.conf'):
+        align_calls.append(path)
+        return True, False
+
+    def fake_exec(container, command, message):
+        assert container == 'vertica_ce'
+        destination = command.rsplit(' ', 1)[-1]
+        if destination == '/data/vertica/config/license.dat':
+            return SimpleNamespace(
+                returncode=1,
+                stdout='',
+                stderr=(
+                    "install: '/opt/vertica/config/license.dat' "
+                    "and '/data/vertica/config/license.dat' are the same file\n"
+                ),
+            )
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    monkeypatch.setattr(smoke, '_align_container_path_identity', fake_align)
+    monkeypatch.setattr(smoke, '_docker_exec_root_shell', fake_exec)
+
+    result = smoke._deploy_vertica_license_fallback(
+        'vertica_ce', '/opt/vertica/config/license.dat'
+    )
+
+    assert result is True
+    assert '/opt/vertica/config/license.dat' in align_calls
+    assert '/data/vertica/config/license.dat' in align_calls
+
+
 def test_discover_license_includes_known_candidates(monkeypatch):
     def fake_exec(container, command, message, allow_root_fallback=True):
         assert container == 'vertica_ce'

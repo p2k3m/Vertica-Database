@@ -3081,12 +3081,52 @@ def _deploy_vertica_license_fallback(
     )
 
     for destination in destinations:
+        if destination == source_path:
+            log(
+                'Vertica license source and destination are identical; '
+                f'skipping copy for {destination}'
+            )
+            deployed = True
+            success, _ = _align_container_path_identity(
+                container,
+                destination,
+                f'Vertica license at {destination}',
+                context='Vertica license',
+            )
+            if not success:
+                log(
+                    'Failed to align Vertica license ownership inside container '
+                    f'at {destination}'
+                )
+            continue
+
         quoted_destination = shlex.quote(destination)
         command = f'install -D -m 0644 {quoted_source} {quoted_destination}'
         result = _docker_exec_root_shell(container, command, missing_cli_message)
         if result is None:
             return False
+
         if result.returncode != 0:
+            combined_output = f"{result.stdout}\n{result.stderr}".lower()
+            if 'are the same file' in combined_output:
+                log(
+                    'Vertica license copy reported identical source and destination; '
+                    f'treating {destination} as already provisioned'
+                )
+                deployed = True
+                success, _ = _align_container_path_identity(
+                    container,
+                    destination,
+                    f'Vertica license at {destination}',
+                    context='Vertica license',
+                )
+                if not success:
+                    log(
+                        'Failed to align Vertica license ownership inside container '
+                        f'at {destination}'
+                    )
+                continue
+
             log(
                 'Failed to copy Vertica license from '
                 f'{source_path} to {destination}'
