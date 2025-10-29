@@ -515,7 +515,9 @@ def test_ensure_vertica_license_installed_disables_root_fallback(monkeypatch):
     monkeypatch.setattr(smoke, '_run_admintools_license_command', fake_run)
     monkeypatch.setattr(smoke, '_install_vertica_license', lambda container: True)
 
-    assert smoke._ensure_vertica_license_installed('vertica_ce') is True
+    status = smoke._ensure_vertica_license_installed('vertica_ce')
+    assert status.installed is True
+    assert status.verified is True
     assert observed == [False, False]
 
 
@@ -545,7 +547,9 @@ def test_ensure_vertica_license_installed_handles_missing_list_tool(monkeypatch)
     monkeypatch.setattr(smoke, '_run_admintools_license_command', fake_run)
     monkeypatch.setattr(smoke, '_install_vertica_license', fake_install)
 
-    assert smoke._ensure_vertica_license_installed('vertica_ce') is True
+    status = smoke._ensure_vertica_license_installed('vertica_ce')
+    assert status.installed is True
+    assert status.verified is False
     assert observed == [False]
     assert installed == ['vertica_ce']
 
@@ -560,8 +564,8 @@ def test_attempt_creation_prefers_license_candidate(monkeypatch):
     def fake_discover(container: str) -> list[str]:
         return ['/opt/vertica/config/license.key']
 
-    def fake_ensure(container: str) -> bool:
-        return False
+    def fake_ensure(container: str) -> smoke.LicenseStatus:
+        return smoke.LicenseStatus(False, False)
 
     responses = [
         SimpleNamespace(returncode=1, stdout='', stderr='Unknown option --license'),
