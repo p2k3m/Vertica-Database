@@ -1797,7 +1797,13 @@ def _run_admintools_license_command(
     return last_result
 
 
-def _align_container_path_identity(container: str, path: str, friendly_name: str) -> tuple[bool, bool]:
+def _align_container_path_identity(
+    container: str,
+    path: str,
+    friendly_name: str,
+    *,
+    context: str = 'admintools.conf',
+) -> tuple[bool, bool]:
     """Attempt to align ``path`` ownership with ``dbadmin`` inside ``container``.
 
     Returns a tuple ``(success, adjusted)`` where ``success`` indicates the
@@ -1839,7 +1845,8 @@ def _align_container_path_identity(container: str, path: str, friendly_name: str
         owner_result = _docker_exec(
             '0',
             f'stat -c "%u:%g" {quoted_path}',
-            'Docker CLI is not available while inspecting admintools.conf ownership inside container',
+            'Docker CLI is not available while '
+            f'inspecting {context} ownership inside container',
         )
         if owner_result is None:
             return False, adjusted
@@ -1852,8 +1859,8 @@ def _align_container_path_identity(container: str, path: str, friendly_name: str
                 except ValueError:
                     current_identity = None
                     log(
-                        'Unexpected ownership output for admintools.conf inside container: '
-                        f'{owner_output!r}'
+                        'Unexpected ownership output for '
+                        f'{context} inside container: {owner_output!r}'
                     )
                 else:
                     if current_identity == target_identity:
@@ -3086,19 +3093,19 @@ def _deploy_vertica_license_fallback(
             )
             continue
 
-        chown_result = _docker_exec_root_shell(
-            container,
-            f'chown dbadmin:dbadmin {quoted_destination}',
-            missing_cli_message,
-        )
-        if chown_result is None:
-            return False
-        if chown_result.returncode != 0:
-            log(
-                'Failed to adjust ownership on '
-                f'{destination} after deploying Vertica license'
-            )
         deployed = True
+
+        success, _ = _align_container_path_identity(
+            container,
+            destination,
+            f'Vertica license at {destination}',
+            context='Vertica license',
+        )
+        if not success:
+            log(
+                'Failed to align Vertica license ownership inside container '
+                f'at {destination}'
+            )
 
     return deployed
 
