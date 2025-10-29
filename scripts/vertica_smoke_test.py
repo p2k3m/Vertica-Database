@@ -1838,13 +1838,30 @@ def _admintools_license_command_variants(
 
     commands: list[str] = []
 
+    base_cli = '/opt/vertica/bin/admintools'
+
     if action == 'list':
-        commands.append('/opt/vertica/bin/admintools -t list_license')
+        commands.extend(
+            (
+                f'{base_cli} -t list_license',
+                f'{base_cli} license --list',
+                f'{base_cli} license --action list',
+                f'{base_cli} license list',
+            )
+        )
     elif action == 'install':
         if license_path is None:
             raise ValueError('license_path must be provided for install action')
-        commands.append(
-            f'/opt/vertica/bin/admintools -t install_license -f {license_path}'
+        commands.extend(
+            (
+                f'{base_cli} -t install_license -f {license_path}',
+                f'{base_cli} license --install -f {license_path}',
+                f'{base_cli} license --install {license_path}',
+                f'{base_cli} license --action install -f {license_path}',
+                f'{base_cli} license --action install {license_path}',
+                f'{base_cli} license install -f {license_path}',
+                f'{base_cli} license install {license_path}',
+            )
         )
     else:
         raise ValueError(f'Unsupported admintools license action: {action}')
