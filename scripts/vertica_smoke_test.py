@@ -228,17 +228,33 @@ def _discover_admintools_license_targets(container: str) -> tuple[str, ...]:
     if cached and now - cached[0] < _ADMINTOOLS_LICENSE_TARGET_CACHE_TTL_SECONDS:
         return cached[1]
 
-    script = 'set -e\n/opt/vertica/bin/admintools -t help'
-    result = _docker_exec_prefer_container_admin(
-        container,
-        ['sh', '-c', script],
-        'Docker CLI is not available while probing Vertica admintools help',
+    help_scripts = (
+        'set -e\n/opt/vertica/bin/admintools -t help',
+        'set -e\n/opt/vertica/bin/admintools --help',
+        'set -e\n/opt/vertica/bin/admintools -h',
     )
 
-    if result is None or result.returncode != 0:
-        targets: tuple[str, ...] = ()
-    else:
-        targets = _parse_admintools_help_for_license_targets(result.stdout)
+    targets: tuple[str, ...] = ()
+
+    for script in help_scripts:
+        result = _docker_exec_prefer_container_admin(
+            container,
+            ['sh', '-c', script],
+            'Docker CLI is not available while probing Vertica admintools help',
+        )
+
+        if result is None:
+            return ()
+
+        if result.returncode == 0:
+            targets = _parse_admintools_help_for_license_targets(result.stdout)
+            break
+
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+        if not any(
+            pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
+        ):
+            break
 
     _ADMINTOOLS_LICENSE_TARGET_CACHE[container] = (now, targets)
     return targets
@@ -276,9 +292,22 @@ def _license_candidate_sort_key(path: str) -> tuple[int, int, str]:
     else:
         priority = 5
 
+    # Vertica ships the actual license material as ``*.key`` files.  Prefer
+    # these before ``*.dat`` (which can be placeholders) and finally any other
+    # extension so we surface genuine license data when retrying ``create_db``
+    # with the ``--license`` option.
+    if lower.endswith('.key'):
+        extension_priority = 0
+    elif lower.endswith('.dat'):
+        extension_priority = 1
+    elif lower.endswith(('.license', '.lic')):
+        extension_priority = 2
+    else:
+        extension_priority = 3
+
     # Within each bucket prefer shorter paths to stabilise ordering while still
     # considering the raw path as a final tiebreaker.
-    return (priority, len(path), lower)
+    return (priority, extension_priority, len(path), lower)
 # Some Vertica container revisions no longer expose dedicated admintools license
 # sub-commands and instead expect callers to supply the bundled Community
 # Edition license file directly to ``create_db``.  Include a set of known
@@ -3297,22 +3326,42 @@ def _ensure_vertica_license_installed(container: str) -> bool:
         return False
 
     combined = f"{status.stdout}\n{status.stderr}".lower()
+    status_unknown = any(
+        pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
+    )
 
-    if any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
+    installed = False
+
+    if status_unknown:
         log(
             'admintools does not provide the list_license tool; attempting manual '
             'license installation'
         )
-        return _install_vertica_license(container)
-
-    if status.returncode == 0:
+        installed = _install_vertica_license(container)
+    elif status.returncode == 0:
         if 'no license' not in combined and 'not been installed' not in combined:
             return True
+        log(
+            'Vertica license status indicates no license is installed; attempting '
+            'installation'
+        )
+        installed = _install_vertica_license(container)
+    else:
+        log(
+            'Vertica license status indicates no license is installed; attempting '
+            'installation'
+        )
+        installed = _install_vertica_license(container)
 
-    log('Vertica license status indicates no license is installed; attempting installation')
-
-    if not _install_vertica_license(container):
+    if not installed:
         return False
+
+    if status_unknown:
+        log(
+            'admintools does not provide a reliable license status command; '
+            'assuming license installation succeeded'
+        )
+        return True
 
     verification = _run_admintools_license_command(
         container,
@@ -3326,10 +3375,22 @@ def _ensure_vertica_license_installed(container: str) -> bool:
         return False
 
     if verification.returncode == 0:
-        combined = f"{verification.stdout}\n{verification.stderr}".lower()
-        if 'no license' in combined or 'not been installed' in combined:
+        combined_verification = f"{verification.stdout}\n{verification.stderr}".lower()
+        if 'no license' in combined_verification or 'not been installed' in combined_verification:
             log('Vertica license verification still reports no license installed')
             return False
+        return True
+
+    combined_verification = f"{verification.stdout}\n{verification.stderr}".lower()
+
+    if any(
+        pattern in combined_verification
+        for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
+    ):
+        log(
+            'admintools does not provide a reliable license status command; '
+            'assuming license installation succeeded'
+        )
         return True
 
     return False
