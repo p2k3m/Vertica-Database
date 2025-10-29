@@ -1,0 +1,3 @@
+Command: AWS_REGION=us-east-1 ./clear-stale-lock.sh
+Timestamp: 2025-10-29T16:40:35Z
+Result: aws CLI not found; skipping Terraform lock cleanup
