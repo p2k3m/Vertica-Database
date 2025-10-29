@@ -223,7 +223,7 @@ jobs:
           Path("ssm-commands.json").write_text(
               json.dumps({"commands": commands}, indent=2)
           )
-PY
+          PY
 
           command_id=$(aws ssm send-command \
             --document-name AWS-RunShellScript \
@@ -464,7 +464,7 @@ PY
           if 'SMOKE_TEST_SUCCESS' not in last_line:
               print('Smoke test did not report success', file=sys.stderr)
               sys.exit(1)
-PY
+          PY
 
       - name: Job summary
         run: |
