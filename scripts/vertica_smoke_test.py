@@ -206,6 +206,7 @@ _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'not recognised',
     'no such option',
     'no such command',
+    'list index out of range',
 )
 
 _ADMINTOOLS_LICENSE_TARGET_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
@@ -1843,11 +1844,18 @@ def _admintools_license_target_commands(
     base = f'/opt/vertica/bin/admintools -t {target}'
 
     if action == 'list':
-        return (
+        commands = [
             f'{base} -k list',
             f'{base} --list',
             f'{base} --action list',
-        )
+        ]
+
+        for verb in ('status', 'show'):
+            commands.append(f'{base} -k {verb}')
+            commands.append(f'{base} --{verb}')
+            commands.append(f'{base} --action {verb}')
+
+        return tuple(dict.fromkeys(commands))
 
     if action == 'install':
         if license_path is None:
@@ -1858,6 +1866,11 @@ def _admintools_license_target_commands(
             commands.append(f'{base} -k install {fragment}')
             commands.append(f'{base} --install {fragment}')
             commands.append(f'{base} --action install {fragment}')
+
+            for verb in ('add', 'apply', 'update', 'load', 'set'):
+                commands.append(f'{base} -k {verb} {fragment}')
+                commands.append(f'{base} --{verb} {fragment}')
+                commands.append(f'{base} --action {verb} {fragment}')
 
         return tuple(dict.fromkeys(commands))
 
@@ -1914,6 +1927,18 @@ def _admintools_license_command_variants(
             f'{base_cli} license --action install {fragment}' for fragment in fragments
         )
         commands.extend(f'{base_cli} license install {fragment}' for fragment in fragments)
+
+        for verb in ('add', 'apply', 'update', 'load', 'set'):
+            commands.extend(
+                f'{base_cli} license --{verb} {fragment}' for fragment in fragments
+            )
+            commands.extend(
+                f'{base_cli} license --action {verb} {fragment}'
+                for fragment in fragments
+            )
+            commands.extend(
+                f'{base_cli} license {verb} {fragment}' for fragment in fragments
+            )
     else:
         raise ValueError(f'Unsupported admintools license action: {action}')
 
