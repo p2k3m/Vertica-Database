@@ -153,7 +153,7 @@ resource "aws_instance" "host" {
     }
   }
 
-  user_data = templatefile("${path.module}/user_data.sh", {
+  user_data_base64 = gzipbase64(templatefile("${path.module}/user_data.sh", {
     vertica_image             = var.vertica_image,
     aws_account_id            = var.aws_account_id,
     aws_region                = var.aws_region,
@@ -163,7 +163,7 @@ resource "aws_instance" "host" {
     additional_admin_password = local.additional_admin_pass,
     vertica_db_name           = local.vertica_db,
     vertica_port              = local.vertica_port
-  })
+  }))
   user_data_replace_on_change = true
 
   root_block_device {
