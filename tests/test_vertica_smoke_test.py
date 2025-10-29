@@ -422,16 +422,21 @@ def test_deploy_vertica_license_fallback_handles_same_file(monkeypatch):
         align_calls.append(path)
         return True, False
 
-    def fake_exec(container, command, message):
+    def fake_exec(container, script, message):
         assert container == 'vertica_ce'
-        destination = command.rsplit(' ', 1)[-1]
-        if destination == '/data/vertica/config/license.dat':
+        src = None
+        dest = None
+        for line in script.splitlines():
+            if line.startswith('src='):
+                src = line.split('=', 1)[1].strip("'\"")
+            if line.startswith('dest='):
+                dest = line.split('=', 1)[1].strip("'\"")
+        if dest == '/data/vertica/config/license.dat':
             return SimpleNamespace(
                 returncode=1,
                 stdout='',
                 stderr=(
-                    "install: '/opt/vertica/config/license.dat' "
-                    "and '/data/vertica/config/license.dat' are the same file\n"
+                    f"cp: '{src}' and '{dest}' are the same file\n"
                 ),
             )
         return SimpleNamespace(returncode=0, stdout='', stderr='')
@@ -446,6 +451,28 @@ def test_deploy_vertica_license_fallback_handles_same_file(monkeypatch):
     assert result is True
     assert '/opt/vertica/config/license.dat' in align_calls
     assert '/data/vertica/config/license.dat' in align_calls
+
+
+def test_deploy_vertica_license_fallback_supports_missing_install(monkeypatch):
+    scripts: list[str] = []
+
+    def fake_align(container, path, friendly_name, *, context='admintools.conf'):
+        return True, False
+
+    def fake_exec(container, script, message):
+        scripts.append(script)
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    monkeypatch.setattr(smoke, '_align_container_path_identity', fake_align)
+    monkeypatch.setattr(smoke, '_docker_exec_root_shell', fake_exec)
+
+    result = smoke._deploy_vertica_license_fallback(
+        'vertica_ce', '/opt/vertica/config/license.dat'
+    )
+
+    assert result is True
+    assert any('command -v install >/dev/null 2>&1' in script for script in scripts)
+    assert any('cp -- "$src" "$tmp"' in script for script in scripts)
 
 
 def test_discover_license_includes_known_candidates(monkeypatch):
