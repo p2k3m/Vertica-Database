@@ -5212,7 +5212,7 @@ def _ensure_primary_admin_user(
         'password': bootstrap_password,
         'database': DB_NAME,
         'autocommit': True,
-        'tlsmode': 'disable',
+        'tlsmode': _resolve_tlsmode(),
     }
 
     with vertica_python.connect(**config) as connection:
@@ -5255,7 +5255,7 @@ def _resolve_tlsmode() -> str:
             stripped = value.strip()
             if stripped:
                 return stripped
-    return "prefer"
+    return "disable"
 
 
 def connect_and_query(
@@ -5367,7 +5367,7 @@ def main() -> int:
     log(STEP_SEPARATOR)
     log(f'Creating smoke test user {smoke_user!r}')
     smoke_user_created = False
-    with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True) as admin_conn:
+    with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True, tlsmode=_resolve_tlsmode()) as admin_conn:
         admin_cursor = admin_conn.cursor()
         admin_cursor.execute(
             f'CREATE USER {_quote_identifier(smoke_user)} IDENTIFIED BY %s',
@@ -5391,7 +5391,7 @@ def main() -> int:
         if smoke_user_created:
             log(STEP_SEPARATOR)
             log(f'Dropping smoke test user {smoke_user!r}')
-            with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True) as admin_conn:
+            with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True, tlsmode=_resolve_tlsmode()) as admin_conn:
                 admin_conn.cursor().execute(
                     f'DROP USER {_quote_identifier(smoke_user)} CASCADE'
                 )

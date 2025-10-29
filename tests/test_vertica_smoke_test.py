@@ -2603,7 +2603,7 @@ def test_reset_vertica_data_directories_removes_config_symlinks(tmp_path, monkey
     assert not (base / 'config').exists()
 
 
-def test_connect_and_query_prefers_tls(monkeypatch):
+def test_connect_and_query_disables_tls_by_default(monkeypatch):
     captured_config: dict[str, object] = {}
 
     class FakeConnection:
@@ -2631,7 +2631,7 @@ def test_connect_and_query_prefers_tls(monkeypatch):
 
     assert smoke.connect_and_query('label', 'host', 'user', 'password', attempts=1, delay=0)
 
-    assert captured_config['tlsmode'] == 'prefer'
+    assert captured_config['tlsmode'] == 'disable'
 
 
 def test_connect_and_query_respects_env_tlsmode(monkeypatch):

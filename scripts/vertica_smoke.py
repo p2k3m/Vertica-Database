@@ -24,6 +24,16 @@ DEFAULT_TERRAFORM_DIR = REPO_ROOT / "infra"
 _DEFAULT_SENTINEL = object()
 
 
+def _resolve_tlsmode() -> str:
+    """Return the desired Vertica TLS mode, defaulting to ``disable``."""
+
+    for key in ("VERTICA_TLSMODE", "DB_TLSMODE"):
+        value = os.getenv(key)
+        if value and value.strip():
+            return value.strip()
+    return "disable"
+
+
 def _get_env_value(*keys: str, default: Optional[str] = _DEFAULT_SENTINEL) -> Optional[str]:
     """Return the first non-empty environment variable among ``keys``."""
 
@@ -113,6 +123,7 @@ def _connect_and_query(host: str, port: int) -> None:
         "user": credentials["user"] or "appadmin",
         "password": credentials["password"],
         "database": "VMart",
+        "tlsmode": _resolve_tlsmode(),
     }
 
     with vertica_python.connect(**config) as connection:
