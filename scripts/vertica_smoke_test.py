@@ -5099,17 +5099,29 @@ def ensure_vertica_container_running(
     )
 
 
-def wait_for_port(host: str, port: int, timeout: float = 900.0) -> None:
+def wait_for_port(host: str, port: int, timeout: float = 600.0) -> None:
     deadline = time.time() + timeout
     last_error: Optional[Exception] = None
+    next_status_update = time.time()
     while time.time() < deadline:
         try:
             with socket.create_connection((host, port), timeout=5.0):
                 return
         except OSError as exc:
             last_error = exc
+            now = time.time()
+            if now >= next_status_update:
+                remaining = max(0.0, deadline - now)
+                log(
+                    'Port '
+                    f'{host}:{port} is not reachable yet ({exc}); '
+                    f'{remaining:.0f}s remaining before timeout'
+                )
+                next_status_update = now + 60.0
             time.sleep(5)
-    raise SystemExit(f'Port {host}:{port} did not become reachable: {last_error}')
+    raise SystemExit(
+        f'Port {host}:{port} did not become reachable within {timeout:.0f}s: {last_error}'
+    )
 
 
 def _bootstrap_admin_credentials() -> tuple[str, str]:
@@ -5289,8 +5301,10 @@ def main() -> int:
 
     ensure_docker_service()
     _sanitize_vertica_data_directories()
-    ensure_vertica_container_running()
-    wait_for_port('127.0.0.1', DB_PORT)
+    ensure_vertica_container_running(timeout=1500.0)
+    log(STEP_SEPARATOR)
+    log('Waiting for Vertica port 5433 to accept TCP connections on localhost')
+    wait_for_port('127.0.0.1', DB_PORT, timeout=600.0)
     log('Verified Vertica port 5433 is accepting TCP connections on localhost')
 
     run_command(['docker', 'ps', '--format', '{{.Names}}\t{{.Status}}'])
