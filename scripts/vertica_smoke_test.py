@@ -249,26 +249,32 @@ def _license_candidate_sort_key(path: str) -> tuple[int, int, str]:
 
     lower = path.lower()
 
+    # Vertica copies the accepted Community Edition license into
+    # ``/data/vertica/config`` where the ``dbadmin`` user can always read it.  The
+    # smoke test invokes ``admintools`` as ``dbadmin``, so prefer these
+    # destinations over the read-only copies in ``/opt``.
+    if lower.startswith('/data/vertica/config/'):
+        priority = 0
     # Prefer explicitly known Vertica Community Edition license paths regardless
     # of discovery order.  These locations historically stored the bundled CE
     # license even as new container images shuffled auxiliary directories.
-    if path in _KNOWN_LICENSE_PATH_CANDIDATES:
-        priority = 0
+    elif path in _KNOWN_LICENSE_PATH_CANDIDATES:
+        priority = 1
     # Next, prioritise files that reside in Vertica's dedicated ``license``
     # directories to avoid unrelated third-party ``LICENSE`` documents that also
     # live under ``/opt/vertica`` (for example, Python package metadata).
     elif '/share/license/' in lower or '/config/license' in lower:
-        priority = 1
+        priority = 2
     # Explicit Vertica-specific filenames (``*.license``/``*.lic``/``*.dat``/``*.key``)
     # are stronger signals than generic text documents.
     elif lower.endswith(('.license', '.lic', '.dat', '.key')):
-        priority = 2
+        priority = 3
     # Any remaining candidates that still contain ``vertica`` in the path are
     # more plausible than unrelated system licenses.
     elif 'vertica' in lower:
-        priority = 3
-    else:
         priority = 4
+    else:
+        priority = 5
 
     # Within each bucket prefer shorter paths to stabilise ordering while still
     # considering the raw path as a final tiebreaker.
@@ -280,6 +286,8 @@ def _license_candidate_sort_key(path: str) -> tuple[int, int, str]:
 # test can still discover it even when ``find`` misses the location (for
 # example, due to deeply nested directory structures or symlinks).
 _KNOWN_LICENSE_PATH_CANDIDATES: tuple[str, ...] = (
+    '/data/vertica/config/license.dat',
+    '/data/vertica/config/license.key',
     '/opt/vertica/config/license.dat',
     '/opt/vertica/config/license.key',
     '/opt/vertica/config/share/license.dat',
