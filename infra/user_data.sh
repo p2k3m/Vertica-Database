@@ -399,6 +399,7 @@ BOOT_USER = os.environ["BOOTSTRAP_ADMIN_USER"]
 BOOT_PASS = os.environ.get("BOOTSTRAP_ADMIN_PASS", "")
 ADMIN_USER = os.environ["ADDITIONAL_ADMIN_USER"]
 ADMIN_PASS = os.environ["ADDITIONAL_ADMIN_PASS"]
+TLSMODE = (os.environ.get("VERTICA_TLSMODE") or os.environ.get("DB_TLSMODE") or "disable").strip() or "disable"
 
 if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ADMIN_USER):
     raise SystemExit(f"Invalid additional admin username: {ADMIN_USER!r}")
@@ -411,6 +412,7 @@ def _connection_config(user: str, password: str) -> dict:
         "password": password,
         "database": DATABASE,
         "autocommit": True,
+        "tlsmode": TLSMODE,
     }
 
 

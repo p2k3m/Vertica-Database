@@ -131,6 +131,7 @@ CONFIG = {
     "user": _get_env_value("DB_USER", "VERTICA_USER", default=DEFAULT_USER),
     "password": _get_env_value("DB_PASSWORD", "VERTICA_PASSWORD", default=DEFAULT_PASSWORD),
     "database": "VMart",
+    "tlsmode": "disable",
 }
 
 
