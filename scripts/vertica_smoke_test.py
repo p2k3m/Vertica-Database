@@ -195,6 +195,13 @@ _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'unrecognised option',
     'invalid argument',
     'invalid option',
+    'unrecognized argument',
+    'unrecognised argument',
+    'unrecognized arguments',
+    'unrecognised arguments',
+    'unexpected argument',
+    'unexpected option',
+    'unexpected arguments',
     'not recognized',
     'not recognised',
     'no such option',
@@ -207,6 +214,48 @@ _ADMINTOOLS_HELP_LICENSE_PATTERN = re.compile(
     r'(?<!\S)([A-Za-z0-9_-]*license[A-Za-z0-9_-]*)',
     re.IGNORECASE,
 )
+
+
+def _license_option_variants(
+    license_path: str, *, include_create_short_flag: bool = False
+) -> tuple[str, ...]:
+    """Return possible Vertica admintools license flag variants for ``license_path``."""
+
+    quoted = shlex.quote(license_path)
+
+    variants: list[str] = []
+
+    if include_create_short_flag:
+        variants.append(f'-l {quoted}')
+        variants.append(f'-l={quoted}')
+
+    variants.extend(
+        [
+        f'-f {quoted}',
+        f'--file {quoted}',
+        f'--file={quoted}',
+        f'--license {quoted}',
+        f'--license={quoted}',
+        f'--license-file {quoted}',
+        f'--license-file={quoted}',
+        f'--license_path {quoted}',
+        f'--license_path={quoted}',
+        f'--license-path {quoted}',
+        f'--license-path={quoted}',
+        f'--licensekey {quoted}',
+        f'--licensekey={quoted}',
+        f'--license-key {quoted}',
+        f'--license-key={quoted}',
+        f'--key {quoted}',
+        f'--key={quoted}',
+        f'--path {quoted}',
+        f'--path={quoted}',
+        quoted,
+        ]
+    )
+
+    # Preserve ordering while removing duplicates.
+    return tuple(dict.fromkeys(variants))
 
 
 class LicenseStatus(NamedTuple):
@@ -1804,13 +1853,13 @@ def _admintools_license_target_commands(
         if license_path is None:
             raise ValueError('license_path must be provided for install action')
 
-        return (
-            f'{base} -k install -f {license_path}',
-            f'{base} --install -f {license_path}',
-            f'{base} --install {license_path}',
-            f'{base} --action install -f {license_path}',
-            f'{base} --action install {license_path}',
-        )
+        commands: list[str] = []
+        for fragment in _license_option_variants(license_path):
+            commands.append(f'{base} -k install {fragment}')
+            commands.append(f'{base} --install {fragment}')
+            commands.append(f'{base} --action install {fragment}')
+
+        return tuple(dict.fromkeys(commands))
 
     raise ValueError(f'Unsupported admintools license action: {action}')
 
@@ -1854,17 +1903,17 @@ def _admintools_license_command_variants(
     elif action == 'install':
         if license_path is None:
             raise ValueError('license_path must be provided for install action')
+        fragments = _license_option_variants(license_path)
         commands.extend(
-            (
-                f'{base_cli} -t install_license -f {license_path}',
-                f'{base_cli} license --install -f {license_path}',
-                f'{base_cli} license --install {license_path}',
-                f'{base_cli} license --action install -f {license_path}',
-                f'{base_cli} license --action install {license_path}',
-                f'{base_cli} license install -f {license_path}',
-                f'{base_cli} license install {license_path}',
-            )
+            f'{base_cli} -t install_license {fragment}' for fragment in fragments
         )
+        commands.extend(
+            f'{base_cli} license --install {fragment}' for fragment in fragments
+        )
+        commands.extend(
+            f'{base_cli} license --action install {fragment}' for fragment in fragments
+        )
+        commands.extend(f'{base_cli} license install {fragment}' for fragment in fragments)
     else:
         raise ValueError(f'Unsupported admintools license action: {action}')
 
@@ -3469,16 +3518,55 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         f"{shlex.quote(host)} -d {shlex.quote(database)} -p {shlex.quote(password)}"
     )
 
-    def _run_create(license_path: Optional[str] = None) -> Optional[subprocess.CompletedProcess[str]]:
-        command = base_command
-        if license_path:
-            command += f" -l {shlex.quote(license_path)}"
-        script = 'set -e\n' + command
-        return _docker_exec_prefer_container_admin(
-            container,
-            ['sh', '-c', script],
-            'Docker CLI is not available while creating Vertica database',
+    def _create_command_variants(
+        license_path: Optional[str],
+    ) -> tuple[str, ...]:
+        if not license_path:
+            return (base_command,)
+
+        fragments = _license_option_variants(
+            license_path, include_create_short_flag=True
         )
+        commands = [
+            f'{base_command} {fragment}'.strip() for fragment in fragments
+        ]
+        return tuple(dict.fromkeys(commands))
+
+    def _run_create(
+        license_path: Optional[str] = None,
+    ) -> Optional[subprocess.CompletedProcess[str]]:
+        commands = _create_command_variants(license_path)
+        last_result: Optional[subprocess.CompletedProcess[str]] = None
+
+        for command in commands:
+            script = 'set -e\n' + command
+            result = _docker_exec_prefer_container_admin(
+                container,
+                ['sh', '-c', script],
+                'Docker CLI is not available while creating Vertica database',
+            )
+
+            if result is None:
+                return None
+
+            last_result = result
+
+            if result.returncode == 0:
+                return result
+
+            combined_attempt = f"{result.stdout}\n{result.stderr}".lower()
+            if (
+                license_path is not None
+                and any(
+                    pattern in combined_attempt
+                    for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
+                )
+            ):
+                continue
+
+            return result
+
+        return last_result
 
     initial_attempts: list[Optional[str]] = []
 
@@ -3503,12 +3591,14 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         combined_attempt = f"{result.stdout}\n{result.stderr}".lower()
         if (
             license_path is not None
-            and 'unknown option' in combined_attempt
-            and '-l' in combined_attempt
+            and any(
+                pattern in combined_attempt
+                for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
+            )
         ):
             log(
                 'admintools reported that the create_db command does not support '
-                'the --license option; retrying without explicit license path'
+                'the supplied license flag; retrying without explicit license path'
             )
             continue
         break
@@ -3570,10 +3660,13 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                     log('Requested Vertica database creation inside container; waiting for recovery')
                     return True
                 combined_retry = f"{retry_result.stdout}\n{retry_result.stderr}".lower()
-                if 'unknown option' in combined_retry and '-l' in combined_retry:
+                if any(
+                    pattern in combined_retry
+                    for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
+                ):
                     log(
                         'admintools reported that the create_db command does not '
-                        'support the --license option; stopping license retries'
+                        'support the supplied license flag; stopping license retries'
                     )
                     break
 
