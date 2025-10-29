@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import vertica_python
 
@@ -205,6 +205,13 @@ _ADMINTOOLS_HELP_LICENSE_PATTERN = re.compile(
     r'(?<!\S)([A-Za-z0-9_-]*license[A-Za-z0-9_-]*)',
     re.IGNORECASE,
 )
+
+
+class LicenseStatus(NamedTuple):
+    """Represents the outcome of a Vertica license installation attempt."""
+
+    installed: bool
+    verified: bool
 
 
 def _parse_admintools_help_for_license_targets(output: str) -> tuple[str, ...]:
@@ -3311,7 +3318,7 @@ def _extract_license_error_paths(message: str) -> tuple[str, ...]:
     return tuple(candidates)
 
 
-def _ensure_vertica_license_installed(container: str) -> bool:
+def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
     """Ensure that a Vertica license is installed inside ``container``."""
 
     status = _run_admintools_license_command(
@@ -3323,14 +3330,12 @@ def _ensure_vertica_license_installed(container: str) -> bool:
     )
 
     if status is None:
-        return False
+        return LicenseStatus(False, False)
 
     combined = f"{status.stdout}\n{status.stderr}".lower()
     status_unknown = any(
         pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
     )
-
-    installed = False
 
     if status_unknown:
         log(
@@ -3338,9 +3343,17 @@ def _ensure_vertica_license_installed(container: str) -> bool:
             'license installation'
         )
         installed = _install_vertica_license(container)
-    elif status.returncode == 0:
+        if not installed:
+            return LicenseStatus(False, False)
+        log(
+            'admintools does not provide a reliable license status command; '
+            'assuming license installation succeeded'
+        )
+        return LicenseStatus(True, False)
+
+    if status.returncode == 0:
         if 'no license' not in combined and 'not been installed' not in combined:
-            return True
+            return LicenseStatus(True, True)
         log(
             'Vertica license status indicates no license is installed; attempting '
             'installation'
@@ -3354,14 +3367,7 @@ def _ensure_vertica_license_installed(container: str) -> bool:
         installed = _install_vertica_license(container)
 
     if not installed:
-        return False
-
-    if status_unknown:
-        log(
-            'admintools does not provide a reliable license status command; '
-            'assuming license installation succeeded'
-        )
-        return True
+        return LicenseStatus(False, False)
 
     verification = _run_admintools_license_command(
         container,
@@ -3372,14 +3378,14 @@ def _ensure_vertica_license_installed(container: str) -> bool:
     )
 
     if verification is None:
-        return False
+        return LicenseStatus(False, False)
 
     if verification.returncode == 0:
         combined_verification = f"{verification.stdout}\n{verification.stderr}".lower()
         if 'no license' in combined_verification or 'not been installed' in combined_verification:
             log('Vertica license verification still reports no license installed')
-            return False
-        return True
+            return LicenseStatus(False, False)
+        return LicenseStatus(True, True)
 
     combined_verification = f"{verification.stdout}\n{verification.stderr}".lower()
 
@@ -3391,9 +3397,9 @@ def _ensure_vertica_license_installed(container: str) -> bool:
             'admintools does not provide a reliable license status command; '
             'assuming license installation succeeded'
         )
-        return True
+        return LicenseStatus(True, False)
 
-    return False
+    return LicenseStatus(False, False)
 
 
 def _attempt_vertica_database_creation(container: str, database: str) -> bool:
@@ -3411,7 +3417,8 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
     )
 
     license_candidates = _discover_container_license_files(container)
-    license_verified = _ensure_vertica_license_installed(container)
+    license_status = _ensure_vertica_license_installed(container)
+    license_verified = license_status.verified
 
     log(
         'Invoking Vertica admintools to create database '
@@ -3482,7 +3489,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
             'the database; attempting to install the default license'
         )
         error_paths = _extract_license_error_paths(raw_output)
-        if license_verified or _ensure_vertica_license_installed(container):
+        if license_verified or _ensure_vertica_license_installed(container).installed:
             log('Retrying Vertica database creation after installing license')
             retry_result = _run_create()
             if retry_result is not None and retry_result.returncode == 0:
