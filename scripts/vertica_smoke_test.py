@@ -199,6 +199,50 @@ _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'not recognised',
 )
 
+_ADMINTOOLS_LICENSE_TARGET_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
+_ADMINTOOLS_LICENSE_TARGET_CACHE_TTL_SECONDS = 300.0
+_ADMINTOOLS_HELP_LICENSE_PATTERN = re.compile(
+    r'(?<!\S)([A-Za-z0-9_-]*license[A-Za-z0-9_-]*)',
+    re.IGNORECASE,
+)
+
+
+def _parse_admintools_help_for_license_targets(output: str) -> tuple[str, ...]:
+    """Extract possible admintools license targets from ``output``."""
+
+    seen: list[str] = []
+    for match in _ADMINTOOLS_HELP_LICENSE_PATTERN.finditer(output):
+        target = match.group(1).strip()
+        if not target or target in seen:
+            continue
+        seen.append(target)
+
+    return tuple(seen)
+
+
+def _discover_admintools_license_targets(container: str) -> tuple[str, ...]:
+    """Return cached admintools targets that appear related to licensing."""
+
+    now = time.monotonic()
+    cached = _ADMINTOOLS_LICENSE_TARGET_CACHE.get(container)
+    if cached and now - cached[0] < _ADMINTOOLS_LICENSE_TARGET_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    script = 'set -e\n/opt/vertica/bin/admintools -t help'
+    result = _docker_exec_prefer_container_admin(
+        container,
+        ['sh', '-c', script],
+        'Docker CLI is not available while probing Vertica admintools help',
+    )
+
+    if result is None or result.returncode != 0:
+        targets: tuple[str, ...] = ()
+    else:
+        targets = _parse_admintools_help_for_license_targets(result.stdout)
+
+    _ADMINTOOLS_LICENSE_TARGET_CACHE[container] = (now, targets)
+    return targets
+
 
 def _license_candidate_sort_key(path: str) -> tuple[int, int, str]:
     """Return a priority tuple that favours genuine Vertica license files."""
@@ -1694,35 +1738,20 @@ def _docker_exec_root_shell(
     return result
 
 
-def _admintools_license_command_variants(
+def _admintools_license_target_commands(
+    target: str,
     action: str,
-    *,
-    license_path: Optional[str] = None,
+    license_path: Optional[str],
 ) -> tuple[str, ...]:
-    """Return potential admintools invocations for ``action``.
+    """Return admintools invocations for ``target`` handling ``action``."""
 
-    ``action`` should be either ``'list'`` or ``'install'``.  Newer Vertica
-    releases route license management through ``admintools -t license`` while
-    older releases continue to provide dedicated helper targets.  Include both
-    styles so callers can transparently fall back without needing to duplicate
-    this command construction logic.
-    """
+    base = f'/opt/vertica/bin/admintools -t {target}'
 
     if action == 'list':
         return (
-            '/opt/vertica/bin/admintools -t list_license',
-            '/opt/vertica/bin/admintools -t license -k list',
-            '/opt/vertica/bin/admintools -t license --list',
-            '/opt/vertica/bin/admintools -t license --action list',
-            '/opt/vertica/bin/admintools -t db_license -k list',
-            '/opt/vertica/bin/admintools -t db_license --list',
-            '/opt/vertica/bin/admintools -t db_license --action list',
-            '/opt/vertica/bin/admintools -t manage_license -k list',
-            '/opt/vertica/bin/admintools -t manage_license --list',
-            '/opt/vertica/bin/admintools -t manage_license --action list',
-            '/opt/vertica/bin/admintools -t license_manager -k list',
-            '/opt/vertica/bin/admintools -t license_manager --list',
-            '/opt/vertica/bin/admintools -t license_manager --action list',
+            f'{base} -k list',
+            f'{base} --list',
+            f'{base} --action list',
         )
 
     if action == 'install':
@@ -1730,30 +1759,63 @@ def _admintools_license_command_variants(
             raise ValueError('license_path must be provided for install action')
 
         return (
-            f'/opt/vertica/bin/admintools -t install_license -f {license_path}',
-            f'/opt/vertica/bin/admintools -t license -k install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t license --install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t license --install {license_path}',
-            f'/opt/vertica/bin/admintools -t license --action install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t license --action install {license_path}',
-            f'/opt/vertica/bin/admintools -t db_license -k install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t db_license --install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t db_license --install {license_path}',
-            f'/opt/vertica/bin/admintools -t db_license --action install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t db_license --action install {license_path}',
-            f'/opt/vertica/bin/admintools -t manage_license -k install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t manage_license --install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t manage_license --install {license_path}',
-            f'/opt/vertica/bin/admintools -t manage_license --action install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t manage_license --action install {license_path}',
-            f'/opt/vertica/bin/admintools -t license_manager -k install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t license_manager --install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t license_manager --install {license_path}',
-            f'/opt/vertica/bin/admintools -t license_manager --action install -f {license_path}',
-            f'/opt/vertica/bin/admintools -t license_manager --action install {license_path}',
+            f'{base} -k install -f {license_path}',
+            f'{base} --install -f {license_path}',
+            f'{base} --install {license_path}',
+            f'{base} --action install -f {license_path}',
+            f'{base} --action install {license_path}',
         )
 
     raise ValueError(f'Unsupported admintools license action: {action}')
+
+
+def _admintools_license_command_variants(
+    action: str,
+    *,
+    license_path: Optional[str] = None,
+    extra_targets: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Return potential admintools invocations for ``action``.
+
+    ``action`` should be either ``'list'`` or ``'install'``.  Newer Vertica
+    releases route license management through ``admintools`` targets that expose
+    sub-commands while older releases continue to provide dedicated helper
+    targets.  Include both styles so callers can transparently fall back without
+    needing to duplicate this command construction logic.  ``extra_targets``
+    allows callers to append dynamically discovered target names.
+    """
+
+    known_targets = (
+        'license',
+        'db_license',
+        'manage_license',
+        'license_manager',
+    )
+
+    commands: list[str] = []
+
+    if action == 'list':
+        commands.append('/opt/vertica/bin/admintools -t list_license')
+    elif action == 'install':
+        if license_path is None:
+            raise ValueError('license_path must be provided for install action')
+        commands.append(
+            f'/opt/vertica/bin/admintools -t install_license -f {license_path}'
+        )
+    else:
+        raise ValueError(f'Unsupported admintools license action: {action}')
+
+    for target in (*known_targets, *extra_targets):
+        commands.extend(
+            _admintools_license_target_commands(target, action, license_path)
+        )
+
+    seen: list[str] = []
+    for command in commands:
+        if command not in seen:
+            seen.append(command)
+
+    return tuple(seen)
 
 
 def _run_admintools_license_command(
@@ -1762,6 +1824,8 @@ def _run_admintools_license_command(
     missing_cli_message: str,
     *,
     allow_root_fallback: bool = True,
+    action: Optional[str] = None,
+    license_path: Optional[str] = None,
 ) -> Optional[subprocess.CompletedProcess[str]]:
     """Execute possible admintools license commands until one succeeds.
 
@@ -1772,8 +1836,11 @@ def _run_admintools_license_command(
     """
 
     last_result: Optional[subprocess.CompletedProcess[str]] = None
+    attempted: set[str] = set()
+    unknown_tool_encountered = False
 
     for command in commands:
+        attempted.add(command)
         result = _docker_exec_prefer_container_admin(
             container,
             ['sh', '-c', command],
@@ -1793,6 +1860,44 @@ def _run_admintools_license_command(
 
         if not any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
             return result
+
+        unknown_tool_encountered = True
+
+    if action is not None and unknown_tool_encountered:
+        extra_targets = _discover_admintools_license_targets(container)
+        if extra_targets:
+            extended_commands = _admintools_license_command_variants(
+                action,
+                license_path=license_path,
+                extra_targets=extra_targets,
+            )
+            for command in extended_commands:
+                if command in attempted:
+                    continue
+                result = _docker_exec_prefer_container_admin(
+                    container,
+                    ['sh', '-c', command],
+                    missing_cli_message,
+                    allow_root_fallback=allow_root_fallback,
+                )
+
+                if result is None:
+                    return None
+
+                last_result = result
+
+                if result.returncode == 0:
+                    return result
+
+                combined = f"{result.stdout}\n{result.stderr}".lower()
+
+                if not any(
+                    pattern in combined
+                    for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
+                ):
+                    return result
+
+                attempted.add(command)
 
     return last_result
 
@@ -3021,6 +3126,8 @@ def _install_vertica_license(container: str) -> bool:
             _admintools_license_command_variants('install', license_path=quoted),
             'Docker CLI is not available while installing Vertica license',
             allow_root_fallback=False,
+            action='install',
+            license_path=quoted,
         )
 
         if result is None:
@@ -3175,6 +3282,7 @@ def _ensure_vertica_license_installed(container: str) -> bool:
         _admintools_license_command_variants('list'),
         'Docker CLI is not available while checking Vertica license status',
         allow_root_fallback=False,
+        action='list',
     )
 
     if status is None:
@@ -3203,6 +3311,7 @@ def _ensure_vertica_license_installed(container: str) -> bool:
         _admintools_license_command_variants('list'),
         'Docker CLI is not available while verifying Vertica license status',
         allow_root_fallback=False,
+        action='list',
     )
 
     if verification is None:
