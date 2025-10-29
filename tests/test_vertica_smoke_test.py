@@ -26,6 +26,7 @@ def _reset_same_file_state(monkeypatch):
     monkeypatch.setattr(smoke, '_CONFIG_COPY_SAME_FILE_LOG_CACHE', {})
     monkeypatch.setattr(smoke, '_VERTICA_CONFIG_SAME_FILE_RECOVERED', {})
     monkeypatch.setattr(smoke, '_EULA_PROMPT_LOG_CACHE', {})
+    monkeypatch.setattr(smoke, '_ADMINTOOLS_LICENSE_TARGET_CACHE', {}, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -221,12 +222,91 @@ def test_run_admintools_license_command_falls_back(monkeypatch):
         'vertica_ce',
         smoke._admintools_license_command_variants('list'),
         'missing docker',
+        action='list',
     )
 
     assert result is not None
     assert result.returncode == 0
     assert commands[0].endswith('list_license')
     assert commands[1].endswith('license -k list')
+
+
+def test_parse_admintools_help_for_license_targets():
+    output = textwrap.dedent(
+        '''
+        Available tools:
+          create_db
+          license_keys
+          manage_License
+          license-usage
+          license_keys
+          somethingelse
+        '''
+    )
+
+    targets = smoke._parse_admintools_help_for_license_targets(output)
+
+    assert targets == ('license_keys', 'manage_License', 'license-usage')
+
+
+def test_run_admintools_license_command_discovers_help_targets(monkeypatch):
+    commands: list[str] = []
+
+    responses = [
+        SimpleNamespace(returncode=1, stdout='', stderr='Unknown tool list_license'),
+        SimpleNamespace(returncode=1, stdout='', stderr='Unknown tool license'),
+        SimpleNamespace(returncode=0, stdout='License installed', stderr=''),
+    ]
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        commands.append(command[-1])
+        if not responses:
+            raise AssertionError('unexpected command execution')
+        return responses.pop(0)
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+    monkeypatch.setattr(
+        smoke,
+        '_discover_admintools_license_targets',
+        lambda _container: ('license_keys',),
+    )
+    
+    def fake_variants(action, *, license_path=None, extra_targets=()):
+        if action == 'list':
+            targets = ('license',) + extra_targets
+            return tuple(
+                f'/opt/vertica/bin/admintools -t {target} -k list'
+                for target in targets
+            )
+        if action == 'install':
+            if license_path is None:
+                raise ValueError('license_path must be provided for install action')
+            targets = ('license',) + extra_targets
+            return tuple(
+                f'/opt/vertica/bin/admintools -t {target} -k install -f {license_path}'
+                for target in targets
+            )
+        raise ValueError(f'Unexpected action {action!r}')
+
+    monkeypatch.setattr(
+        smoke,
+        '_admintools_license_command_variants',
+        fake_variants,
+    )
+
+    result = smoke._run_admintools_license_command(
+        'vertica_ce',
+        (
+            '/opt/vertica/bin/admintools -t list_license',
+            '/opt/vertica/bin/admintools -t license -k list',
+        ),
+        'missing docker',
+        action='list',
+    )
+
+    assert result is not None
+    assert result.returncode == 0
+    assert any(cmd.endswith('license_keys -k list') for cmd in commands)
 
 
 def test_install_vertica_license_uses_fallback(monkeypatch):
@@ -406,6 +486,8 @@ def test_ensure_vertica_license_installed_disables_root_fallback(monkeypatch):
         message: str,
         *,
         allow_root_fallback: bool,
+        action=None,
+        license_path=None,
     ) -> SimpleNamespace:
         observed.append(allow_root_fallback)
         return responses.pop(0)
@@ -426,6 +508,8 @@ def test_ensure_vertica_license_installed_handles_missing_list_tool(monkeypatch)
         message: str,
         *,
         allow_root_fallback: bool,
+        action=None,
+        license_path=None,
     ) -> SimpleNamespace:
         observed.append(allow_root_fallback)
         return SimpleNamespace(
