@@ -473,6 +473,26 @@ def test_discover_license_prioritises_known_paths(monkeypatch):
     assert candidates[-1] == '/opt/vertica/oss/python3/lib/python3.11/LICENSE.txt'
 
 
+def test_discover_license_prefers_data_config_paths(monkeypatch):
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        assert container == 'vertica_ce'
+        stdout = '\n'.join(
+            [
+                '/opt/vertica/config/license.dat',
+                '/data/vertica/config/license.dat',
+            ]
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr='')
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda tool: None)
+
+    candidates = smoke._discover_container_license_files('vertica_ce')
+
+    assert candidates[0] == '/data/vertica/config/license.dat'
+    assert candidates[1] == '/opt/vertica/config/license.dat'
+
+
 def test_ensure_vertica_license_installed_disables_root_fallback(monkeypatch):
     responses = [
         SimpleNamespace(returncode=0, stdout='No license installed', stderr=''),
