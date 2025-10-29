@@ -153,7 +153,7 @@ resource "aws_instance" "host" {
     }
   }
 
-  user_data_base64 = gzip(templatefile("${path.module}/user_data.sh", {
+  user_data_base64 = base64encode(templatefile("${path.module}/user_data.sh", {
     vertica_image             = var.vertica_image,
     aws_account_id            = var.aws_account_id,
     aws_region                = var.aws_region,
