@@ -214,7 +214,11 @@ jobs:
           commands = [
               "set -euo pipefail",
               "if ! python3 -m pip --version >/dev/null 2>&1; then python3 -m ensurepip --upgrade || (dnf install -y python3-pip); fi",
-              "if ! python3 -m pip install --quiet --upgrade pip; then echo '[warn] Unable to upgrade pip; continuing with system-provided version'; fi",
+              "if command -v rpm >/dev/null 2>&1 && rpm -q python3-pip >/dev/null 2>&1; then",
+              "  echo '[info] Skipping pip upgrade because python3-pip is managed by the system package manager'",
+              "elif ! python3 -m pip install --quiet --upgrade pip; then",
+              "  echo '[warn] Unable to upgrade pip; continuing with system-provided version'",
+              "fi",
               "python3 -m pip install --quiet 'urllib3<2'",
               "python3 -m pip install --quiet vertica-python",
               decompress_command,
