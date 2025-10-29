@@ -161,8 +161,6 @@ services:
       - VERTICA_EULA_ACCEPTANCE=ACCEPT
       - VERTICA_DB_EULA_ACCEPTED=1
       - VERTICA_EULA_ACCEPTED=1
-      # Use uppercase ACCEPT tokens to satisfy newer Vertica images that enforce
-      # case-sensitive EULA checks while remaining backwards compatible.
       - VERTICA_DB_EULA=ACCEPT
       - VERTICA_EULA=ACCEPT
       - VERTICA_LICENSE=ACCEPT
@@ -186,12 +184,6 @@ mkdir -p /var/lib/vertica
 # container starts as.  When the host does not provide a matching user we leave
 # ownership unchanged so the smoke test can discover the in-container identity
 # dynamically once Vertica starts.
-# Amazon Linux 2023 no longer ships a dbadmin user by default.  Avoid forcing
-# legacy UID/GID assumptions when the account is absent locally because newer
-# Vertica container images no longer use uid 500 for the dbadmin account.  This
-# mirrors the behaviour of the smoke test which relaxes ownership expectations
-# and instead relies on permissive directory modes so Vertica can manage the
-# contents with whichever identity the container provides.
 if id -u dbadmin >/dev/null 2>&1; then
   target_uid="$(id -u dbadmin)"
   target_gid="$(id -g dbadmin)"
