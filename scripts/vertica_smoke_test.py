@@ -3271,8 +3271,28 @@ def _deploy_vertica_license_fallback(
             continue
 
         quoted_destination = shlex.quote(destination)
-        command = f'install -D -m 0644 {quoted_source} {quoted_destination}'
-        result = _docker_exec_root_shell(container, command, missing_cli_message)
+        script = '\n'.join(
+            (
+                'set -e',
+                f'src={quoted_source}',
+                f'dest={quoted_destination}',
+                'dest_dir=$(dirname "$dest")',
+                'if [ -e "$dest_dir" ] && [ ! -d "$dest_dir" ]; then rm -rf "$dest_dir"; fi',
+                'mkdir -p "$dest_dir"',
+                'if command -v install >/dev/null 2>&1; then',
+                '  install -m 0644 "$src" "$dest"',
+                'else',
+                '  tmp="${dest}.tmp.$$"',
+                '  trap \'rm -f "$tmp"\' EXIT INT TERM',
+                '  umask 022',
+                '  cp -- "$src" "$tmp"',
+                '  chmod 0644 "$tmp"',
+                '  mv -- "$tmp" "$dest"',
+                '  trap - EXIT INT TERM',
+                'fi',
+            )
+        )
+        result = _docker_exec_root_shell(container, script, missing_cli_message)
         if result is None:
             return False
 
