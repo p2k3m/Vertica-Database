@@ -228,7 +228,7 @@ def test_run_admintools_license_command_falls_back(monkeypatch):
     assert result is not None
     assert result.returncode == 0
     assert commands[0].endswith('list_license')
-    assert commands[1].endswith('license -k list')
+    assert commands[1].endswith('license --list')
 
 
 def test_parse_admintools_help_for_license_targets():
@@ -325,7 +325,9 @@ def test_install_vertica_license_uses_fallback(monkeypatch):
     monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
 
     assert smoke._install_vertica_license('vertica_ce') is True
-    assert any('license -k install' in cmd for cmd in commands)
+    assert any(
+        'license --install' in cmd or 'license install' in cmd for cmd in commands
+    )
 
 
 def test_install_vertica_license_deploys_fallback_when_admintools_missing(monkeypatch):
