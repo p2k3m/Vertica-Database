@@ -384,6 +384,35 @@ def test_ensure_vertica_license_installed_disables_root_fallback(monkeypatch):
     assert observed == [False, False]
 
 
+def test_ensure_vertica_license_installed_handles_missing_list_tool(monkeypatch):
+    observed: list[bool] = []
+
+    def fake_run(
+        container: str,
+        commands: tuple[str, ...],
+        message: str,
+        *,
+        allow_root_fallback: bool,
+    ) -> SimpleNamespace:
+        observed.append(allow_root_fallback)
+        return SimpleNamespace(
+            returncode=1, stdout='', stderr='Unknown tool list_license'
+        )
+
+    installed: list[str] = []
+
+    def fake_install(container: str) -> bool:
+        installed.append(container)
+        return True
+
+    monkeypatch.setattr(smoke, '_run_admintools_license_command', fake_run)
+    monkeypatch.setattr(smoke, '_install_vertica_license', fake_install)
+
+    assert smoke._ensure_vertica_license_installed('vertica_ce') is True
+    assert observed == [False]
+    assert installed == ['vertica_ce']
+
+
 def test_attempt_creation_prefers_license_candidate(monkeypatch):
     commands: list[str] = []
 
