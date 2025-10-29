@@ -197,6 +197,8 @@ _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'invalid option',
     'not recognized',
     'not recognised',
+    'no such option',
+    'no such command',
 )
 
 _ADMINTOOLS_LICENSE_TARGET_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
