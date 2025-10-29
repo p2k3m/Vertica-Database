@@ -216,6 +216,16 @@ _ADMINTOOLS_HELP_LICENSE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_ADMINTOOLS_LICENSE_HELP_KEYWORDS: dict[str, tuple[str, ...]] = {
+    'list': ('list', 'show', 'status', 'display', 'view'),
+    'install': ('install', 'add', 'apply', 'update', 'load', 'set', 'deploy'),
+}
+_ADMINTOOLS_LICENSE_HELP_COMMAND_CACHE: dict[
+    tuple[str, str, Optional[str]],
+    tuple[float, tuple[str, ...]],
+] = {}
+_ADMINTOOLS_LICENSE_HELP_COMMAND_CACHE_TTL_SECONDS = 300.0
+
 
 def _license_option_variants(
     license_path: str, *, include_create_short_flag: bool = False
@@ -239,10 +249,22 @@ def _license_option_variants(
         f'--license={quoted}',
         f'--license-file {quoted}',
         f'--license-file={quoted}',
+        f'--licensefile {quoted}',
+        f'--licensefile={quoted}',
+        f'--license_file {quoted}',
+        f'--license_file={quoted}',
         f'--license_path {quoted}',
         f'--license_path={quoted}',
         f'--license-path {quoted}',
         f'--license-path={quoted}',
+        f'--licensepath {quoted}',
+        f'--licensepath={quoted}',
+        f'--license-file-path {quoted}',
+        f'--license-file-path={quoted}',
+        f'--license_file_path {quoted}',
+        f'--license_file_path={quoted}',
+        f'--licensefilepath {quoted}',
+        f'--licensefilepath={quoted}',
         f'--licensekey {quoted}',
         f'--licensekey={quoted}',
         f'--license-key {quoted}',
@@ -251,6 +273,18 @@ def _license_option_variants(
         f'--key={quoted}',
         f'--path {quoted}',
         f'--path={quoted}',
+        f'--install-license {quoted}',
+        f'--install-license={quoted}',
+        f'--install_license {quoted}',
+        f'--install_license={quoted}',
+        f'--add-license {quoted}',
+        f'--add-license={quoted}',
+        f'--add_license {quoted}',
+        f'--add_license={quoted}',
+        f'--apply-license {quoted}',
+        f'--apply-license={quoted}',
+        f'--apply_license {quoted}',
+        f'--apply_license={quoted}',
         quoted,
         ]
     )
@@ -317,6 +351,145 @@ def _discover_admintools_license_targets(container: str) -> tuple[str, ...]:
 
     _ADMINTOOLS_LICENSE_TARGET_CACHE[container] = (now, targets)
     return targets
+
+
+def _parse_admintools_license_help_actions(output: str) -> dict[str, tuple[str, ...]]:
+    """Return help fragments keyed by action extracted from ``output``."""
+
+    if not output:
+        return {}
+
+    actions: dict[str, list[str]] = {key: [] for key in _ADMINTOOLS_LICENSE_HELP_KEYWORDS}
+    seen: set[str] = set()
+
+    tokens = re.findall(r'(--[A-Za-z0-9][A-Za-z0-9_-]*|[A-Za-z0-9_-]+)', output)
+
+    for token in tokens:
+        if not token:
+            continue
+        lower = token.lower()
+        if token in seen:
+            continue
+        seen.add(token)
+
+        for action, keywords in _ADMINTOOLS_LICENSE_HELP_KEYWORDS.items():
+            if any(keyword in lower for keyword in keywords):
+                actions[action].append(token)
+                break
+
+    return {
+        action: tuple(values)
+        for action, values in actions.items()
+        if values
+    }
+
+
+def _admintools_license_help_action_commands(
+    action: str,
+    fragments: tuple[str, ...],
+    license_path: Optional[str],
+) -> tuple[str, ...]:
+    """Return admintools invocations derived from help ``fragments``."""
+
+    if not fragments:
+        return ()
+
+    commands: list[str] = []
+    seen: set[str] = set()
+
+    def _add(command: str) -> None:
+        command = command.strip()
+        if command and command not in seen:
+            seen.add(command)
+            commands.append(command)
+
+    base_cli = '/opt/vertica/bin/admintools license'
+
+    if action == 'list':
+        for fragment in fragments:
+            _add(f'{base_cli} {fragment}')
+            if fragment.startswith('--'):
+                normalised = fragment.lstrip('-')
+                _add(f'{base_cli} --action {normalised}')
+            else:
+                _add(f'{base_cli} --{fragment}')
+                _add(f'{base_cli} --action {fragment}')
+
+        return tuple(commands)
+
+    if action == 'install':
+        if license_path is None:
+            return ()
+
+        fragments_with_path = _license_option_variants(license_path)
+        quoted_path = shlex.quote(license_path)
+
+        for fragment in fragments:
+            _add(f'{base_cli} {fragment}')
+
+            for option in fragments_with_path:
+                _add(f'{base_cli} {fragment} {option}')
+                _add(f'{base_cli} {option} {fragment}')
+
+            if fragment.endswith('='):
+                _add(f'{base_cli} {fragment}{quoted_path}')
+            elif fragment.startswith('--'):
+                _add(f'{base_cli} {fragment} {quoted_path}')
+                _add(f'{base_cli} {fragment}={quoted_path}')
+            else:
+                _add(f'{base_cli} {fragment} {quoted_path}')
+
+        return tuple(commands)
+
+    return ()
+
+
+def _discover_admintools_license_help_commands(
+    container: str,
+    action: str,
+    license_path: Optional[str],
+) -> tuple[str, ...]:
+    """Return additional admintools commands discovered from help output."""
+
+    cache_key = (container, action, license_path)
+    now = time.monotonic()
+    cached = _ADMINTOOLS_LICENSE_HELP_COMMAND_CACHE.get(cache_key)
+    if cached and now - cached[0] < _ADMINTOOLS_LICENSE_HELP_COMMAND_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    help_scripts = (
+        'set -e\n/opt/vertica/bin/admintools license --help',
+        'set -e\n/opt/vertica/bin/admintools -t license --help',
+        'set -e\n/opt/vertica/bin/admintools --help',
+    )
+
+    collected: list[str] = []
+
+    for script in help_scripts:
+        result = _docker_exec_prefer_container_admin(
+            container,
+            ['sh', '-c', script],
+            'Docker CLI is not available while probing Vertica admintools license help',
+        )
+
+        if result is None:
+            return ()
+
+        output = f"{result.stdout}\n{result.stderr}" if result.stdout or result.stderr else ''
+        collected.append(output)
+
+        parsed = _parse_admintools_license_help_actions(output)
+        fragments = parsed.get(action)
+        if fragments:
+            commands = _admintools_license_help_action_commands(action, fragments, license_path)
+            _ADMINTOOLS_LICENSE_HELP_COMMAND_CACHE[cache_key] = (now, commands)
+            return commands
+
+    combined_output = '\n'.join(collected)
+    fragments = _parse_admintools_license_help_actions(combined_output).get(action, ())
+    commands = _admintools_license_help_action_commands(action, fragments, license_path)
+    _ADMINTOOLS_LICENSE_HELP_COMMAND_CACHE[cache_key] = (now, commands)
+    return commands
 
 
 def _license_candidate_sort_key(path: str) -> tuple[int, int, str]:
@@ -1898,6 +2071,7 @@ def _admintools_license_command_variants(
         'db_license',
         'manage_license',
         'license_manager',
+        'license-manager',
     )
 
     commands: list[str] = []
@@ -1972,12 +2146,22 @@ def _run_admintools_license_command(
     returned so callers can surface a helpful log message.
     """
 
-    last_result: Optional[subprocess.CompletedProcess[str]] = None
+    commands_to_try: list[str] = list(commands)
     attempted: set[str] = set()
+    last_result: Optional[subprocess.CompletedProcess[str]] = None
     unknown_tool_encountered = False
+    extra_targets_added = False
+    help_commands_added = False
 
-    for command in commands:
+    index = 0
+    while index < len(commands_to_try):
+        command = commands_to_try[index]
+        index += 1
+
+        if command in attempted:
+            continue
         attempted.add(command)
+
         result = _docker_exec_prefer_container_admin(
             container,
             ['sh', '-c', command],
@@ -2000,41 +2184,32 @@ def _run_admintools_license_command(
 
         unknown_tool_encountered = True
 
-    if action is not None and unknown_tool_encountered:
-        extra_targets = _discover_admintools_license_targets(container)
-        if extra_targets:
-            extended_commands = _admintools_license_command_variants(
-                action,
-                license_path=license_path,
-                extra_targets=extra_targets,
-            )
-            for command in extended_commands:
-                if command in attempted:
-                    continue
-                result = _docker_exec_prefer_container_admin(
-                    container,
-                    ['sh', '-c', command],
-                    missing_cli_message,
-                    allow_root_fallback=allow_root_fallback,
+        if action is None:
+            continue
+
+        if not extra_targets_added:
+            extra_targets_added = True
+            extra_targets = _discover_admintools_license_targets(container)
+            if extra_targets:
+                extended_commands = _admintools_license_command_variants(
+                    action,
+                    license_path=license_path,
+                    extra_targets=extra_targets,
                 )
+                for extra_command in extended_commands:
+                    if extra_command not in attempted and extra_command not in commands_to_try:
+                        commands_to_try.append(extra_command)
 
-                if result is None:
-                    return None
-
-                last_result = result
-
-                if result.returncode == 0:
-                    return result
-
-                combined = f"{result.stdout}\n{result.stderr}".lower()
-
-                if not any(
-                    pattern in combined
-                    for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
-                ):
-                    return result
-
-                attempted.add(command)
+        if not help_commands_added:
+            help_commands_added = True
+            help_commands = _discover_admintools_license_help_commands(
+                container,
+                action,
+                license_path,
+            )
+            for extra_command in help_commands:
+                if extra_command not in attempted and extra_command not in commands_to_try:
+                    commands_to_try.append(extra_command)
 
     return last_result
 
