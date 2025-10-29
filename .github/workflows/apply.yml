@@ -261,13 +261,13 @@ jobs:
                   invocation_missing = 'InvocationDoesNotExist' in stderr
                   not_found = 'ResourceNotFoundException' in stderr
                   if allow_failure and (invocation_missing or not_found or (throttled and retry_on_throttle)):
-            if throttled and retry_on_throttle:
-                time.sleep(1)
-            return default
+                      if throttled and retry_on_throttle:
+                          time.sleep(1)
+                      return default
                   raise RuntimeError(
-            f"Command {' '.join(cmd)} failed with exit code {result.returncode}: {stderr or result.stdout}"
+                      f"Command {' '.join(cmd)} failed with exit code {result.returncode}: {stderr or result.stdout}"
                   )
-          
+
               output = result.stdout.strip()
               if not output:
                   return default
@@ -275,7 +275,7 @@ jobs:
                   return json.loads(output)
               except json.JSONDecodeError as exc:  # pragma: no cover - defensive guard for CLI output changes
                   raise RuntimeError(
-            f'Failed to decode JSON from {" ".join(cmd)}: {exc}\nRaw output: {result.stdout}'
+                      f'Failed to decode JSON from {" ".join(cmd)}: {exc}\nRaw output: {result.stdout}'
                   ) from exc
           
           
@@ -312,9 +312,9 @@ jobs:
               now = time.monotonic()
               if status != last_status or status_details != last_details:
                   if status_details:
-            log(f'SSM status: {status} ({status_details})')
+                      log(f'SSM status: {status} ({status_details})')
                   else:
-            log(f'SSM status: {status}')
+                      log(f'SSM status: {status}')
                   last_status = status
                   last_details = status_details
                   last_status_emit = now
@@ -333,82 +333,82 @@ jobs:
               )
               for inv in plugin_list.get('CommandInvocations', []):
                   if inv.get('InstanceId') != instance_id:
-            continue
+                      continue
                   for plugin in inv.get('CommandPlugins', []):
-            name = plugin.get('Name', '<unknown>')
-            plugin_status = plugin.get('StatusDetails') or plugin.get('Status') or ''
-            response_code = plugin.get('ResponseCode')
-            output = plugin.get('Output') or ''
-            output_hash = hashlib.sha256(output.encode('utf-8')).hexdigest() if output else None
-            digest = (plugin_status, response_code, output_hash)
-            if plugin_state.get(name) != digest:
-                plugin_state[name] = digest
-                status_line = plugin_status or 'Unknown'
-                if response_code not in (None, -1):
-                    status_line = f"{status_line} (code {response_code})"
-                log(f'Plugin {name}: {status_line}')
-                trimmed_output = output.strip()
-                if trimmed_output:
-                    tail_lines = trimmed_output.splitlines()[-20:]
-                    for line in tail_lines:
-                        print(f'    [plugin] {line}', flush=True)
+                      name = plugin.get('Name', '<unknown>')
+                      plugin_status = plugin.get('StatusDetails') or plugin.get('Status') or ''
+                      response_code = plugin.get('ResponseCode')
+                      output = plugin.get('Output') or ''
+                      output_hash = hashlib.sha256(output.encode('utf-8')).hexdigest() if output else None
+                      digest = (plugin_status, response_code, output_hash)
+                      if plugin_state.get(name) != digest:
+                          plugin_state[name] = digest
+                          status_line = plugin_status or 'Unknown'
+                          if response_code not in (None, -1):
+                              status_line = f"{status_line} (code {response_code})"
+                          log(f'Plugin {name}: {status_line}')
+                          trimmed_output = output.strip()
+                          if trimmed_output:
+                              tail_lines = trimmed_output.splitlines()[-20:]
+                              for line in tail_lines:
+                                  print(f'    [plugin] {line}', flush=True)
           
               if log_group:
                   if not log_stream_name:
-            streams = aws_cli_json(
-                [
-                    'logs',
-                    'describe-log-streams',
-                    '--log-group-name',
-                    log_group,
-                    '--log-stream-name-prefix',
-                    f'{command_id}/{instance_id}',
-                ],
-                allow_failure=True,
-                default={'logStreams': []},
-            )
-            for stream in streams.get('logStreams', []):
-                candidate = stream.get('logStreamName')
-                if candidate:
-                    log_stream_name = candidate
-                    log(f'Discovered CloudWatch Logs stream: {log_stream_name}')
-                    break
-          
+                      streams = aws_cli_json(
+                          [
+                              'logs',
+                              'describe-log-streams',
+                              '--log-group-name',
+                              log_group,
+                              '--log-stream-name-prefix',
+                              f'{command_id}/{instance_id}',
+                          ],
+                          allow_failure=True,
+                          default={'logStreams': []},
+                      )
+                      for stream in streams.get('logStreams', []):
+                          candidate = stream.get('logStreamName')
+                          if candidate:
+                              log_stream_name = candidate
+                              log(f'Discovered CloudWatch Logs stream: {log_stream_name}')
+                              break
+
               if log_stream_name:
                   log_events_args = [
-            'logs',
-            'get-log-events',
-            '--log-group-name',
-            log_group,
-            '--log-stream-name',
-            log_stream_name,
+                      'logs',
+                      'get-log-events',
+                      '--log-group-name',
+                      log_group,
+                      '--log-stream-name',
+                      log_stream_name,
                   ]
                   if next_token:
-            log_events_args.extend(['--next-token', next_token])
+                      log_events_args.extend(['--next-token', next_token])
                   else:
-            log_events_args.append('--start-from-head')
-          
+                      log_events_args.append('--start-from-head')
+
                   events_data = aws_cli_json(
-            log_events_args,
-            allow_failure=True,
-            default=None,
+                      log_events_args,
+                      allow_failure=True,
+                      default=None,
                   )
                   if events_data:
-            next_forward = events_data.get('nextForwardToken')
-            if next_forward:
-                next_token = next_forward
-            for event in events_data.get('events', []):
-                timestamp = event.get('timestamp')
-                message = (event.get('message') or '').rstrip('\n')
-                key = (timestamp or 0, message)
-                if key in printed_events:
-                    continue
-                printed_events.add(key)
-                if timestamp is None:
-                    print(f'[cw] {message}', flush=True)
-                else:
-                    log_time = dt.datetime.fromtimestamp(timestamp / 1000, dt.timezone.utc).isoformat()
-                    print(f'[cw][{log_time}] {message}', flush=True)
+                      next_forward = events_data.get('nextForwardToken')
+                      if next_forward:
+                          next_token = next_forward
+                      for event in events_data.get('events', []):
+                          timestamp = event.get('timestamp')
+                          message = (event.get('message') or '').rstrip('\n')
+                          key = (timestamp or 0, message)
+                          if key in printed_events:
+                              continue
+                          printed_events.add(key)
+                          if timestamp is None:
+                              print(f'[cw] {message}', flush=True)
+                          else:
+                              log_time = dt.datetime.fromtimestamp(timestamp / 1000, dt.timezone.utc).isoformat()
+                              print(f'[cw][{log_time}] {message}', flush=True)
           
               if status == 'Success' and invocation:
                   final_invocation = invocation
