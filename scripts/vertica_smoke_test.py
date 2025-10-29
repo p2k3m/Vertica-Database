@@ -3137,10 +3137,10 @@ def _ensure_vertica_license_installed(container: str) -> bool:
 
     if any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
         log(
-            'admintools does not provide the list_license tool; relying on database '
-            'creation to supply the license'
+            'admintools does not provide the list_license tool; attempting manual '
+            'license installation'
         )
-        return False
+        return _install_vertica_license(container)
 
     if status.returncode == 0:
         if 'no license' not in combined and 'not been installed' not in combined:
