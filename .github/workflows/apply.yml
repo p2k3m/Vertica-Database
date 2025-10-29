@@ -180,50 +180,50 @@ jobs:
           echo "Instance registration detected: $ssm_entry"
 
           python - <<'PY'
-          import base64
-          import gzip
-          import json
-          import os
-          import shlex
-          import textwrap
-          from pathlib import Path
+import base64
+import gzip
+import json
+import os
+import shlex
+import textwrap
+from pathlib import Path
 
-          script_path = Path("scripts/vertica_smoke_test.py")
-          admin_user = os.environ["ADMIN_USER"]
-          admin_password = os.environ["ADMIN_PASSWORD"]
+script_path = Path("scripts/vertica_smoke_test.py")
+admin_user = os.environ["ADMIN_USER"]
+admin_password = os.environ["ADMIN_PASSWORD"]
 
-          encoded = base64.b64encode(gzip.compress(script_path.read_bytes())).decode("ascii")
-          encoded_lines = "\n".join(textwrap.wrap(encoded, 120))
+encoded = base64.b64encode(gzip.compress(script_path.read_bytes())).decode("ascii")
+encoded_lines = "\n".join(textwrap.wrap(encoded, 120))
 
-          decompress_command = "\n".join((
-              "python3 <<'PY'",
-              "import base64, gzip, pathlib",
-              "DATA = '''",
-              encoded_lines,
-              "'''",
-              "pathlib.Path('vertica_smoke_test.py').write_bytes(",
-              "    gzip.decompress(base64.b64decode(DATA))",
-              ")",
-              "PY",
-          ))
+decompress_command = "\n".join((
+    "python3 <<'PY'",
+    "import base64, gzip, pathlib",
+    "DATA = '''",
+    encoded_lines,
+    "'''",
+    "pathlib.Path('vertica_smoke_test.py').write_bytes(",
+    "    gzip.decompress(base64.b64decode(DATA))",
+    ")",
+    "PY",
+))
 
-          env_parts = [
-              f"ADMIN_USER={shlex.quote(admin_user)}",
-              f"ADMIN_PASSWORD={shlex.quote(admin_password)}",
-          ]
-          commands = [
-              "set -euo pipefail",
-              "if ! python3 -m pip --version >/dev/null 2>&1; then python3 -m ensurepip --upgrade || (dnf install -y python3-pip); fi",
-              "if ! python3 -m pip install --quiet --upgrade pip; then echo '[warn] Unable to upgrade pip; continuing with system-provided version'; fi",
-              "python3 -m pip install --quiet 'urllib3<2'",
-              "python3 -m pip install --quiet vertica-python",
-              decompress_command,
-              f"{' '.join(env_parts)} python3 vertica_smoke_test.py",
-          ]
-          Path("ssm-commands.json").write_text(
-              json.dumps({"commands": commands}, indent=2)
-          )
-          PY
+env_parts = [
+    f"ADMIN_USER={shlex.quote(admin_user)}",
+    f"ADMIN_PASSWORD={shlex.quote(admin_password)}",
+]
+commands = [
+    "set -euo pipefail",
+    "if ! python3 -m pip --version >/dev/null 2>&1; then python3 -m ensurepip --upgrade || (dnf install -y python3-pip); fi",
+    "if ! python3 -m pip install --quiet --upgrade pip; then echo '[warn] Unable to upgrade pip; continuing with system-provided version'; fi",
+    "python3 -m pip install --quiet 'urllib3<2'",
+    "python3 -m pip install --quiet vertica-python",
+    decompress_command,
+    f"{' '.join(env_parts)} python3 vertica_smoke_test.py",
+]
+Path("ssm-commands.json").write_text(
+    json.dumps({"commands": commands}, indent=2)
+)
+PY
 
           command_id=$(aws ssm send-command \
             --document-name AWS-RunShellScript \
@@ -234,237 +234,237 @@ jobs:
             --query 'Command.CommandId' \
             --output text)
 
-            COMMAND_ID="$command_id" python - <<'PY'
-              import datetime as dt
-              import hashlib
-              import json
-              import os
-              import subprocess
-              import sys
-              import time
+          COMMAND_ID="$command_id" python - <<'PY'
+import datetime as dt
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import time
 
-              command_id = os.environ['COMMAND_ID']
-              instance_id = os.environ['INSTANCE_ID']
-              log_group = os.environ.get('SSM_LOG_GROUP', '')
-              timeout_seconds = 2100
-              deadline = time.monotonic() + timeout_seconds
+command_id = os.environ['COMMAND_ID']
+instance_id = os.environ['INSTANCE_ID']
+log_group = os.environ.get('SSM_LOG_GROUP', '')
+timeout_seconds = 2100
+deadline = time.monotonic() + timeout_seconds
 
-              os.environ.setdefault('AWS_PAGER', '')
-
-
-              def aws_cli_json(args, *, allow_failure=False, default=None, retry_on_throttle=True):
-                  cmd = ['aws', *args, '--output', 'json', '--no-cli-pager']
-                  result = subprocess.run(cmd, capture_output=True, text=True)
-                  if result.returncode != 0:
-                      stderr = result.stderr.strip()
-                      throttled = 'ThrottlingException' in stderr
-                      invocation_missing = 'InvocationDoesNotExist' in stderr
-                      not_found = 'ResourceNotFoundException' in stderr
-                      if allow_failure and (invocation_missing or not_found or (throttled and retry_on_throttle)):
-                          if throttled and retry_on_throttle:
-                              time.sleep(1)
-                          return default
-                      raise RuntimeError(
-                          f"Command {' '.join(cmd)} failed with exit code {result.returncode}: {stderr or result.stdout}"
-                      )
-
-                  output = result.stdout.strip()
-                  if not output:
-                      return default
-                  try:
-                      return json.loads(output)
-                  except json.JSONDecodeError as exc:  # pragma: no cover - defensive guard for CLI output changes
-                      raise RuntimeError(
-                          f'Failed to decode JSON from {" ".join(cmd)}: {exc}\nRaw output: {result.stdout}'
-                      ) from exc
+os.environ.setdefault('AWS_PAGER', '')
 
 
-              def log(message: str) -> None:
-                  timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
-                  print(f"[{timestamp}] {message}", flush=True)
+def aws_cli_json(args, *, allow_failure=False, default=None, retry_on_throttle=True):
+    cmd = ['aws', *args, '--output', 'json', '--no-cli-pager']
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        throttled = 'ThrottlingException' in stderr
+        invocation_missing = 'InvocationDoesNotExist' in stderr
+        not_found = 'ResourceNotFoundException' in stderr
+        if allow_failure and (invocation_missing or not_found or (throttled and retry_on_throttle)):
+            if throttled and retry_on_throttle:
+                time.sleep(1)
+            return default
+        raise RuntimeError(
+            f"Command {' '.join(cmd)} failed with exit code {result.returncode}: {stderr or result.stdout}"
+        )
+
+    output = result.stdout.strip()
+    if not output:
+        return default
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive guard for CLI output changes
+        raise RuntimeError(
+            f'Failed to decode JSON from {" ".join(cmd)}: {exc}\nRaw output: {result.stdout}'
+        ) from exc
 
 
-              last_status = None
-              last_details = None
-              last_status_emit = 0.0
-              plugin_state: dict[str, tuple[str, int | None, str | None]] = {}
-              log_stream_name: str | None = None
-              next_token: str | None = None
-              printed_events: set[tuple[int, str]] = set()
-              final_invocation: dict | None = None
-
-              while time.monotonic() < deadline:
-                  invocation = aws_cli_json(
-                      ['ssm', 'get-command-invocation', '--command-id', command_id, '--instance-id', instance_id],
-                      allow_failure=True,
-                      default=None,
-                  )
-
-                  status = 'InProgress'
-                  status_details = ''
-                  if invocation:
-                      status = invocation.get('Status') or status
-                      status_details = invocation.get('StatusDetails') or ''
-                  else:
-                      status = 'Pending'
-                      status_details = 'Command invocation not yet initialised'
-
-                  now = time.monotonic()
-                  if status != last_status or status_details != last_details:
-                      if status_details:
-                          log(f'SSM status: {status} ({status_details})')
-                      else:
-                          log(f'SSM status: {status}')
-                      last_status = status
-                      last_details = status_details
-                      last_status_emit = now
-                  elif now - last_status_emit >= 60.0:
-                      log(f'SSM status unchanged: {status}')
-                      last_status_emit = now
-
-                  if invocation and status in {'Failed', 'Cancelled', 'TimedOut', 'Cancelling'}:
-                      print(json.dumps(invocation, indent=2), flush=True)
-                      sys.exit(1)
-
-                  plugin_list = aws_cli_json(
-                      ['ssm', 'list-command-invocations', '--command-id', command_id, '--details'],
-                      allow_failure=True,
-                      default={},
-                  )
-                  for inv in plugin_list.get('CommandInvocations', []):
-                      if inv.get('InstanceId') != instance_id:
-                          continue
-                      for plugin in inv.get('CommandPlugins', []):
-                          name = plugin.get('Name', '<unknown>')
-                          plugin_status = plugin.get('StatusDetails') or plugin.get('Status') or ''
-                          response_code = plugin.get('ResponseCode')
-                          output = plugin.get('Output') or ''
-                          output_hash = hashlib.sha256(output.encode('utf-8')).hexdigest() if output else None
-                          digest = (plugin_status, response_code, output_hash)
-                          if plugin_state.get(name) != digest:
-                              plugin_state[name] = digest
-                              status_line = plugin_status or 'Unknown'
-                              if response_code not in (None, -1):
-                                  status_line = f"{status_line} (code {response_code})"
-                              log(f'Plugin {name}: {status_line}')
-                              trimmed_output = output.strip()
-                              if trimmed_output:
-                                  tail_lines = trimmed_output.splitlines()[-20:]
-                                  for line in tail_lines:
-                                      print(f'    [plugin] {line}', flush=True)
-
-                  if log_group:
-                      if not log_stream_name:
-                          streams = aws_cli_json(
-                              [
-                                  'logs',
-                                  'describe-log-streams',
-                                  '--log-group-name',
-                                  log_group,
-                                  '--log-stream-name-prefix',
-                                  f'{command_id}/{instance_id}',
-                              ],
-                              allow_failure=True,
-                              default={'logStreams': []},
-                          )
-                          for stream in streams.get('logStreams', []):
-                              candidate = stream.get('logStreamName')
-                              if candidate:
-                                  log_stream_name = candidate
-                                  log(f'Discovered CloudWatch Logs stream: {log_stream_name}')
-                                  break
-
-                  if log_stream_name:
-                      log_events_args = [
-                          'logs',
-                          'get-log-events',
-                          '--log-group-name',
-                          log_group,
-                          '--log-stream-name',
-                          log_stream_name,
-                      ]
-                      if next_token:
-                          log_events_args.extend(['--next-token', next_token])
-                      else:
-                          log_events_args.append('--start-from-head')
-
-                      events_data = aws_cli_json(
-                          log_events_args,
-                          allow_failure=True,
-                          default=None,
-                      )
-                      if events_data:
-                          next_forward = events_data.get('nextForwardToken')
-                          if next_forward:
-                              next_token = next_forward
-                          for event in events_data.get('events', []):
-                              timestamp = event.get('timestamp')
-                              message = (event.get('message') or '').rstrip('\n')
-                              key = (timestamp or 0, message)
-                              if key in printed_events:
-                                  continue
-                              printed_events.add(key)
-                              if timestamp is None:
-                                  print(f'[cw] {message}', flush=True)
-                              else:
-                                  log_time = dt.datetime.fromtimestamp(timestamp / 1000, dt.timezone.utc).isoformat()
-                                  print(f'[cw][{log_time}] {message}', flush=True)
-
-                  if status == 'Success' and invocation:
-                      final_invocation = invocation
-                      break
-
-                  time.sleep(15)
-
-              else:
-                  log('SSM command did not complete before timeout; fetching latest details for troubleshooting.')
-                  details = aws_cli_json(
-                      ['ssm', 'get-command-invocation', '--command-id', command_id, '--instance-id', instance_id],
-                      allow_failure=True,
-                      default=None,
-                      retry_on_throttle=False,
-                  )
-                  if details:
-                      print(json.dumps(details, indent=2), flush=True)
-                  summary = aws_cli_json(
-                      ['ssm', 'list-command-invocations', '--command-id', command_id, '--details'],
-                      allow_failure=True,
-                      default=None,
-                      retry_on_throttle=False,
-                  )
-                  if summary:
-                      print(json.dumps(summary, indent=2), flush=True)
-                  sys.exit(1)
+def log(message: str) -> None:
+    timestamp = dt.datetime.now(dt.timezone.utc).isoformat()
+    print(f"[{timestamp}] {message}", flush=True)
 
 
-              if final_invocation is None:
-                  final_invocation = aws_cli_json(
-                      ['ssm', 'get-command-invocation', '--command-id', command_id, '--instance-id', instance_id],
-                      allow_failure=False,
-                  )
+last_status = None
+last_details = None
+last_status_emit = 0.0
+plugin_state: dict[str, tuple[str, int | None, str | None]] = {}
+log_stream_name: str | None = None
+next_token: str | None = None
+printed_events: set[tuple[int, str]] = set()
+final_invocation: dict | None = None
 
-              stdout_content = final_invocation.get('StandardOutputContent', '') or ''
-              stderr_content = final_invocation.get('StandardErrorContent', '') or ''
+while time.monotonic() < deadline:
+    invocation = aws_cli_json(
+        ['ssm', 'get-command-invocation', '--command-id', command_id, '--instance-id', instance_id],
+        allow_failure=True,
+        default=None,
+    )
 
-              print('===== SSM command standard output =====')
-              if stdout_content:
-                  print(stdout_content.rstrip('\n'))
-              print('===== End of standard output =====')
+    status = 'InProgress'
+    status_details = ''
+    if invocation:
+        status = invocation.get('Status') or status
+        status_details = invocation.get('StatusDetails') or ''
+    else:
+        status = 'Pending'
+        status_details = 'Command invocation not yet initialised'
 
-              if stderr_content:
-                  print('===== SSM command standard error =====')
-                  print(stderr_content.rstrip('\n'))
-                  print('===== End of standard error =====')
+    now = time.monotonic()
+    if status != last_status or status_details != last_details:
+        if status_details:
+            log(f'SSM status: {status} ({status_details})')
+        else:
+            log(f'SSM status: {status}')
+        last_status = status
+        last_details = status_details
+        last_status_emit = now
+    elif now - last_status_emit >= 60.0:
+        log(f'SSM status unchanged: {status}')
+        last_status_emit = now
 
-              last_line = ''
-              for line in stdout_content.rstrip('\n').splitlines():
-                  if line.strip():
-                      last_line = line
+    if invocation and status in {'Failed', 'Cancelled', 'TimedOut', 'Cancelling'}:
+        print(json.dumps(invocation, indent=2), flush=True)
+        sys.exit(1)
 
-              if 'SMOKE_TEST_SUCCESS' not in last_line:
-                  print('Smoke test did not report success', file=sys.stderr)
-                  sys.exit(1)
-            PY
+    plugin_list = aws_cli_json(
+        ['ssm', 'list-command-invocations', '--command-id', command_id, '--details'],
+        allow_failure=True,
+        default={},
+    )
+    for inv in plugin_list.get('CommandInvocations', []):
+        if inv.get('InstanceId') != instance_id:
+            continue
+        for plugin in inv.get('CommandPlugins', []):
+            name = plugin.get('Name', '<unknown>')
+            plugin_status = plugin.get('StatusDetails') or plugin.get('Status') or ''
+            response_code = plugin.get('ResponseCode')
+            output = plugin.get('Output') or ''
+            output_hash = hashlib.sha256(output.encode('utf-8')).hexdigest() if output else None
+            digest = (plugin_status, response_code, output_hash)
+            if plugin_state.get(name) != digest:
+                plugin_state[name] = digest
+                status_line = plugin_status or 'Unknown'
+                if response_code not in (None, -1):
+                    status_line = f"{status_line} (code {response_code})"
+                log(f'Plugin {name}: {status_line}')
+                trimmed_output = output.strip()
+                if trimmed_output:
+                    tail_lines = trimmed_output.splitlines()[-20:]
+                    for line in tail_lines:
+                        print(f'    [plugin] {line}', flush=True)
+
+    if log_group:
+        if not log_stream_name:
+            streams = aws_cli_json(
+                [
+                    'logs',
+                    'describe-log-streams',
+                    '--log-group-name',
+                    log_group,
+                    '--log-stream-name-prefix',
+                    f'{command_id}/{instance_id}',
+                ],
+                allow_failure=True,
+                default={'logStreams': []},
+            )
+            for stream in streams.get('logStreams', []):
+                candidate = stream.get('logStreamName')
+                if candidate:
+                    log_stream_name = candidate
+                    log(f'Discovered CloudWatch Logs stream: {log_stream_name}')
+                    break
+
+    if log_stream_name:
+        log_events_args = [
+            'logs',
+            'get-log-events',
+            '--log-group-name',
+            log_group,
+            '--log-stream-name',
+            log_stream_name,
+        ]
+        if next_token:
+            log_events_args.extend(['--next-token', next_token])
+        else:
+            log_events_args.append('--start-from-head')
+
+        events_data = aws_cli_json(
+            log_events_args,
+            allow_failure=True,
+            default=None,
+        )
+        if events_data:
+            next_forward = events_data.get('nextForwardToken')
+            if next_forward:
+                next_token = next_forward
+            for event in events_data.get('events', []):
+                timestamp = event.get('timestamp')
+                message = (event.get('message') or '').rstrip('\n')
+                key = (timestamp or 0, message)
+                if key in printed_events:
+                    continue
+                printed_events.add(key)
+                if timestamp is None:
+                    print(f'[cw] {message}', flush=True)
+                else:
+                    log_time = dt.datetime.fromtimestamp(timestamp / 1000, dt.timezone.utc).isoformat()
+                    print(f'[cw][{log_time}] {message}', flush=True)
+
+    if status == 'Success' and invocation:
+        final_invocation = invocation
+        break
+
+    time.sleep(15)
+
+else:
+    log('SSM command did not complete before timeout; fetching latest details for troubleshooting.')
+    details = aws_cli_json(
+        ['ssm', 'get-command-invocation', '--command-id', command_id, '--instance-id', instance_id],
+        allow_failure=True,
+        default=None,
+        retry_on_throttle=False,
+    )
+    if details:
+        print(json.dumps(details, indent=2), flush=True)
+    summary = aws_cli_json(
+        ['ssm', 'list-command-invocations', '--command-id', command_id, '--details'],
+        allow_failure=True,
+        default=None,
+        retry_on_throttle=False,
+    )
+    if summary:
+        print(json.dumps(summary, indent=2), flush=True)
+    sys.exit(1)
+
+
+if final_invocation is None:
+    final_invocation = aws_cli_json(
+        ['ssm', 'get-command-invocation', '--command-id', command_id, '--instance-id', instance_id],
+        allow_failure=False,
+    )
+
+stdout_content = final_invocation.get('StandardOutputContent', '') or ''
+stderr_content = final_invocation.get('StandardErrorContent', '') or ''
+
+print('===== SSM command standard output =====')
+if stdout_content:
+    print(stdout_content.rstrip('\n'))
+print('===== End of standard output =====')
+
+if stderr_content:
+    print('===== SSM command standard error =====')
+    print(stderr_content.rstrip('\n'))
+    print('===== End of standard error =====')
+
+last_line = ''
+for line in stdout_content.rstrip('\n').splitlines():
+    if line.strip():
+        last_line = line
+
+if 'SMOKE_TEST_SUCCESS' not in last_line:
+    print('Smoke test did not report success', file=sys.stderr)
+    sys.exit(1)
+PY
 
       - name: Job summary
         run: |
