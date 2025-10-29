@@ -2154,38 +2154,43 @@ def _run_admintools_license_command(
     help_commands_added = False
 
     index = 0
-    while index < len(commands_to_try):
-        command = commands_to_try[index]
-        index += 1
 
-        if command in attempted:
-            continue
-        attempted.add(command)
+    while True:
+        while index < len(commands_to_try):
+            command = commands_to_try[index]
+            index += 1
 
-        result = _docker_exec_prefer_container_admin(
-            container,
-            ['sh', '-c', command],
-            missing_cli_message,
-            allow_root_fallback=allow_root_fallback,
-        )
+            if command in attempted:
+                continue
+            attempted.add(command)
 
-        if result is None:
-            return None
+            result = _docker_exec_prefer_container_admin(
+                container,
+                ['sh', '-c', command],
+                missing_cli_message,
+                allow_root_fallback=allow_root_fallback,
+            )
 
-        last_result = result
+            if result is None:
+                return None
 
-        if result.returncode == 0:
-            return result
+            last_result = result
 
-        combined = f"{result.stdout}\n{result.stderr}".lower()
+            if result.returncode == 0:
+                return result
 
-        if not any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
-            return result
+            combined = f"{result.stdout}\n{result.stderr}".lower()
 
-        unknown_tool_encountered = True
+            if not any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
+                return result
 
-        if action is None:
-            continue
+            unknown_tool_encountered = True
+
+        if not unknown_tool_encountered or action is None:
+            return last_result
+
+        unknown_tool_encountered = False
+        expanded = False
 
         if not extra_targets_added:
             extra_targets_added = True
@@ -2199,8 +2204,9 @@ def _run_admintools_license_command(
                 for extra_command in extended_commands:
                     if extra_command not in attempted and extra_command not in commands_to_try:
                         commands_to_try.append(extra_command)
+                        expanded = True
 
-        if not help_commands_added:
+        if not expanded and not help_commands_added:
             help_commands_added = True
             help_commands = _discover_admintools_license_help_commands(
                 container,
@@ -2210,8 +2216,10 @@ def _run_admintools_license_command(
             for extra_command in help_commands:
                 if extra_command not in attempted and extra_command not in commands_to_try:
                     commands_to_try.append(extra_command)
+                    expanded = True
 
-    return last_result
+        if not expanded:
+            return last_result
 
 
 def _align_container_path_identity(
