@@ -221,7 +221,7 @@ jobs:
                 fi
               else
                 echo "[warn] Unable to determine association ID for $SSM_DOCUMENT on $INSTANCE_ID"
-                aws ssm describe-instance-associations-status \\
+                aws ssm describe-instance-associations-status \
                   --instance-id "$INSTANCE_ID" || true
               fi
             fi
