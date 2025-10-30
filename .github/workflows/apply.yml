@@ -140,6 +140,7 @@ jobs:
           echo "instance_id=$(terraform output -raw instance_id)" >> $GITHUB_OUTPUT
           echo "admin_user=$(terraform output -raw additional_admin_username)" >> $GITHUB_OUTPUT
           echo "admin_pass=$(terraform output -raw additional_admin_password)" >> $GITHUB_OUTPUT
+          echo "ssm_document=$(terraform output -raw ssm_smoke_test_document)" >> $GITHUB_OUTPUT
           echo "ssm_log_group=$(terraform output -raw smoke_test_log_group)" >> $GITHUB_OUTPUT
 
       - name: Smoke test via SSM
@@ -147,6 +148,7 @@ jobs:
           INSTANCE_ID: "${{ steps.out.outputs.instance_id }}"
           ADMIN_USER: "${{ steps.out.outputs.admin_user }}"
           ADMIN_PASSWORD: "${{ steps.out.outputs.admin_pass }}"
+          SSM_DOCUMENT: "${{ steps.out.outputs.ssm_document }}"
           SSM_LOG_GROUP: "${{ steps.out.outputs.ssm_log_group }}"
         run: |
           set -euo pipefail
@@ -178,6 +180,92 @@ jobs:
           fi
 
           echo "Instance registration detected: $ssm_entry"
+
+          eval "$(
+            echo "$ssm_entry" | python3 - <<'PY'
+import json
+import shlex
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except json.JSONDecodeError:
+    data = []
+
+status = ''
+counts = {}
+if isinstance(data, list) and data:
+    record = data[0]
+    if isinstance(record, dict):
+        value = record.get('AssociationStatus')
+        if isinstance(value, str):
+            status = value.strip()
+        overview = record.get('AssociationOverview')
+        if isinstance(overview, dict):
+            aggregated = overview.get('InstanceAssociationStatusAggregatedCount')
+            if isinstance(aggregated, dict):
+                counts = {
+                    str(k): int(v)
+                    for k, v in aggregated.items()
+                    if isinstance(v, (int, float))
+                }
+
+counts_json = json.dumps(counts, sort_keys=True)
+
+print(f"association_status={shlex.quote(status)}")
+print(f"association_counts={shlex.quote(counts_json)}")
+PY
+          )"
+
+          if [ "${association_status:-}" = "Failed" ]; then
+            echo "[warn] SSM association status reported failure; aggregated counts: $association_counts"
+
+            if [ -n "${SSM_DOCUMENT:-}" ]; then
+              association_id=$(aws ssm list-associations \
+                --association-filter-list Key=InstanceId,Value="$INSTANCE_ID" Key=Name,Value="$SSM_DOCUMENT" \
+                --query 'Associations[0].AssociationId' \
+                --output text || true)
+
+              if [ -n "$association_id" ] && [ "$association_id" != "None" ]; then
+                echo "[info] Gathering diagnostics for association $association_id"
+                aws ssm describe-association --association-id "$association_id" || true
+
+                executions=$(aws ssm describe-association-executions \
+                  --association-id "$association_id" \
+                  --max-results 5 \
+                  --output json || true)
+                echo "$executions"
+
+                latest_execution_id=$(echo "$executions" | python3 - <<'PY'
+import json
+import sys
+
+try:
+    payload = json.loads(sys.stdin.read())
+except json.JSONDecodeError:
+    print('', end='')
+    sys.exit()
+
+executions = payload.get('AssociationExecutions')
+if isinstance(executions, list) and executions:
+    first = executions[0]
+    if isinstance(first, dict):
+        execution_id = first.get('ExecutionId')
+        if isinstance(execution_id, str):
+            print(execution_id, end='')
+PY
+                )
+
+                if [ -n "$latest_execution_id" ]; then
+                  aws ssm describe-association-execution-targets \
+                    --association-id "$association_id" \
+                    --execution-id "$latest_execution_id" || true
+                fi
+              else
+                echo "[warn] Unable to determine association ID for $SSM_DOCUMENT on $INSTANCE_ID"
+              fi
+            fi
+          fi
 
           python - <<'PY'
           import base64
