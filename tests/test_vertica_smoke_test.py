@@ -2632,6 +2632,10 @@ def test_connect_and_query_disables_tls_by_default(monkeypatch):
     assert smoke.connect_and_query('label', 'host', 'user', 'password', attempts=1, delay=0)
 
     assert captured_config['tlsmode'] == 'disable'
+    assert (
+        captured_config['connection_timeout']
+        == smoke.VERTICA_CLIENT_CONNECT_TIMEOUT_SECONDS
+    )
 
 
 def test_connect_and_query_respects_env_tlsmode(monkeypatch):
@@ -2664,6 +2668,10 @@ def test_connect_and_query_respects_env_tlsmode(monkeypatch):
     assert smoke.connect_and_query('label', 'host', 'user', 'password', attempts=1, delay=0)
 
     assert captured_config['tlsmode'] == 'require'
+    assert (
+        captured_config['connection_timeout']
+        == smoke.VERTICA_CLIENT_CONNECT_TIMEOUT_SECONDS
+    )
 
 
 def test_connect_and_query_nonfatal(monkeypatch):
@@ -2850,6 +2858,7 @@ def test_compose_up_forces_container_removal_on_conflict(monkeypatch):
 
 def test_ensure_primary_admin_user_creates_user(monkeypatch):
     executed: list[tuple[str, tuple | list | None]] = []
+    configs: list[dict[str, object]] = []
 
     class FakeCursor:
         def __init__(self):
@@ -2874,17 +2883,23 @@ def test_ensure_primary_admin_user_creates_user(monkeypatch):
         def cursor(self):
             return FakeCursor()
 
-    monkeypatch.setattr(smoke.vertica_python, 'connect', lambda **config: FakeConnection())
+    def fake_connect(**config):
+        configs.append(config)
+        return FakeConnection()
+
+    monkeypatch.setattr(smoke.vertica_python, 'connect', fake_connect)
 
     smoke._ensure_primary_admin_user('dbadmin', '', 'appadmin', 'secret')
 
     statements = [statement for statement, _ in executed]
     assert any(statement.startswith('CREATE USER "appadmin"') for statement in statements)
     assert any('GRANT ALL PRIVILEGES ON DATABASE "VMart"' in statement for statement in statements)
+    assert configs[0]['connection_timeout'] == smoke.VERTICA_CLIENT_CONNECT_TIMEOUT_SECONDS
 
 
 def test_ensure_primary_admin_user_rotates_password(monkeypatch):
     executed: list[tuple[str, tuple | list | None]] = []
+    configs: list[dict[str, object]] = []
 
     class FakeCursor:
         def __init__(self):
@@ -2909,13 +2924,18 @@ def test_ensure_primary_admin_user_rotates_password(monkeypatch):
         def cursor(self):
             return FakeCursor()
 
-    monkeypatch.setattr(smoke.vertica_python, 'connect', lambda **config: FakeConnection())
+    def fake_connect(**config):
+        configs.append(config)
+        return FakeConnection()
+
+    monkeypatch.setattr(smoke.vertica_python, 'connect', fake_connect)
 
     smoke._ensure_primary_admin_user('dbadmin', '', 'appadmin', 'secret')
 
     statements = [statement for statement, _ in executed]
     assert any(statement.startswith('ALTER USER "appadmin"') for statement in statements)
     assert all(not statement.startswith('CREATE USER') for statement in statements[1:])
+    assert configs[0]['connection_timeout'] == smoke.VERTICA_CLIENT_CONNECT_TIMEOUT_SECONDS
 
 
 def test_ensure_primary_admin_user_skips_when_matching_bootstrap(monkeypatch):

@@ -71,6 +71,7 @@
           "        'database': database",
           "        'autocommit': True",
           "        'tlsmode': tls_mode",
+          "        'connection_timeout': 5.0",
           "    }",
           "def ensure_user(cursor, username, password):",
           "    cursor.execute('SELECT 1 FROM users WHERE user_name = %s', [username])",
