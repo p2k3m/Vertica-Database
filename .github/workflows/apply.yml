@@ -182,39 +182,7 @@ jobs:
           echo "Instance registration detected: $ssm_entry"
 
           eval "$(
-            echo "$ssm_entry" | python3 - <<'PY'
-import json
-import shlex
-import sys
-
-try:
-    data = json.load(sys.stdin)
-except json.JSONDecodeError:
-    data = []
-
-status = ''
-counts = {}
-if isinstance(data, list) and data:
-    record = data[0]
-    if isinstance(record, dict):
-        value = record.get('AssociationStatus')
-        if isinstance(value, str):
-            status = value.strip()
-        overview = record.get('AssociationOverview')
-        if isinstance(overview, dict):
-            aggregated = overview.get('InstanceAssociationStatusAggregatedCount')
-            if isinstance(aggregated, dict):
-                counts = {
-                    str(k): int(v)
-                    for k, v in aggregated.items()
-                    if isinstance(v, (int, float))
-                }
-
-counts_json = json.dumps(counts, sort_keys=True)
-
-print(f"association_status={shlex.quote(status)}")
-print(f"association_counts={shlex.quote(counts_json)}")
-PY
+            echo "$ssm_entry" | python3 scripts/parse_ssm_entry.py
           )"
 
           if [ "${association_status:-}" = "Failed" ]; then
@@ -236,25 +204,7 @@ PY
                   --output json || true)
                 echo "$executions"
 
-                latest_execution_id=$(echo "$executions" | python3 - <<'PY'
-import json
-import sys
-
-try:
-    payload = json.loads(sys.stdin.read())
-except json.JSONDecodeError:
-    print('', end='')
-    sys.exit()
-
-executions = payload.get('AssociationExecutions')
-if isinstance(executions, list) and executions:
-    first = executions[0]
-    if isinstance(first, dict):
-        execution_id = first.get('ExecutionId')
-        if isinstance(execution_id, str):
-            print(execution_id, end='')
-PY
-                )
+                latest_execution_id=$(echo "$executions" | python3 scripts/extract_latest_execution_id.py)
 
                 if [ -n "$latest_execution_id" ]; then
                   aws ssm describe-association-execution-targets \
