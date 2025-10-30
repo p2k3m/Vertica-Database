@@ -17,7 +17,7 @@
           "echo '[info] amazon-ssm-agent is active'",
           "echo '[info] Capturing instance metadata for diagnostics'",
           "TOKEN=$(curl -s -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' || true)",
-          "if [ -n \"$TOKEN\" ]; then IMDS_HEADER=(-H 'X-aws-ec2-metadata-token: '$TOKEN); else IMDS_HEADER=(); fi",
+          "if [ -n \"$TOKEN\" ]; then IMDS_HEADER=(-H \"X-aws-ec2-metadata-token: $TOKEN\"); else IMDS_HEADER=(); fi",
           "META=$(curl -s \"$${IMDS_HEADER[@]}\" http://169.254.169.254/latest/dynamic/instance-identity/document || true)",
           "echo '[debug] Instance identity document:'",
           "echo \"$META\"",
