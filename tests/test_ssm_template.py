@@ -15,3 +15,5 @@ def test_ssm_smoke_test_pip_installs_have_timeouts():
     assert template.count("'--retries'") == 2
     assert template.count("'2'") >= 2
     assert template.count("'--no-input'") == 2
+    assert 'timeout=120' in template
+    assert 'subprocess.TimeoutExpired' in template
