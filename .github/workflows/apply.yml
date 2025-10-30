@@ -190,7 +190,7 @@ jobs:
 
             if [ -n "${SSM_DOCUMENT:-}" ]; then
               association_id=$(aws ssm list-associations \
-                --association-filter-list Key=InstanceId,Value="$INSTANCE_ID" Key=Name,Value="$SSM_DOCUMENT" \
+                --association-filter-list key=InstanceId,value="$INSTANCE_ID" key=Name,value="$SSM_DOCUMENT" \
                 --query 'Associations[0].AssociationId' \
                 --output text || true)
 
