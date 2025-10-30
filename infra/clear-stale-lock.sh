@@ -3,6 +3,12 @@ set -euo pipefail
 
 : "${AWS_REGION:=${AWS_DEFAULT_REGION:-}}" || true
 
+log() {
+  local ts
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo "[clear-stale-lock] ${ts} $*" >&2
+}
+
 determine_config_region() {
   local profile="$1"
   local profile_flag=()
@@ -34,19 +40,13 @@ if [[ -z "${AWS_REGION}" ]] && command -v aws >/dev/null 2>&1; then
 fi
 
 if [[ -z "${AWS_REGION}" ]]; then
-  echo "clear-stale-lock: AWS_REGION is not set and could not be determined" >&2
-  exit 1
+  log "AWS region could not be determined; skipping Terraform lock cleanup"
+  exit 0
 fi
 
 TABLE="tf-locks"
 KEY_PATH="state/terraform.tfstate"
 STALE_AFTER_SECONDS=${STALE_AFTER_SECONDS:-1800}
-
-log() {
-  local ts
-  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  echo "[clear-stale-lock] ${ts} $*" >&2
-}
 
 declare -A SEEN_LOCKS=()
 
