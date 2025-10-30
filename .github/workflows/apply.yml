@@ -189,10 +189,18 @@ jobs:
             echo "[warn] SSM association status reported failure; aggregated counts: $association_counts"
 
             if [ -n "${SSM_DOCUMENT:-}" ]; then
-              association_id=$(aws ssm list-associations \
-                --association-filter-list key=InstanceId,value="$INSTANCE_ID" key=Name,value="$SSM_DOCUMENT" \
-                --query 'Associations[0].AssociationId' \
-                --output text || true)
+              association_id=$(aws ssm describe-association \
+                --instance-id "$INSTANCE_ID" \
+                --name "$SSM_DOCUMENT" \
+                --query 'AssociationDescription.AssociationId' \
+                --output text 2>/dev/null || true)
+
+              if [ -z "$association_id" ] || [ "$association_id" = "None" ]; then
+                association_id=$(aws ssm list-associations \
+                  --association-filter-list key=InstanceId,value="$INSTANCE_ID" key=Name,value="$SSM_DOCUMENT" \
+                  --query 'Associations[0].AssociationId' \
+                  --output text || true)
+              fi
 
               if [ -n "$association_id" ] && [ "$association_id" != "None" ]; then
                 echo "[info] Gathering diagnostics for association $association_id"
