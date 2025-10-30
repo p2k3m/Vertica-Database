@@ -193,7 +193,6 @@ resource "aws_ssm_document" "vertica_smoke_test" {
     smoke_test_username          = local.smoke_test_user
     smoke_test_password          = local.smoke_test_pass
     vertica_db_name              = local.vertica_db
-    vertica_python_wheel_b64     = trimspace(file("${path.module}/assets/vertica_python-1.4.0-py3-none-any.whl.b64"))
   })
 
   tags = {
