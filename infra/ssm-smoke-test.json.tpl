@@ -115,8 +115,8 @@
           "log('All connectivity checks passed successfully')",
           "PY",
           "echo '[info] Performing TCP reachability checks for localhost and public interfaces'",
-          "nc -vz 127.0.0.1 ${vertica_port}",
-          "nc -vz $PUBLIC_IP ${vertica_port}",
+          "nc -vz -w 5 127.0.0.1 ${vertica_port}",
+          "nc -vz -w 5 $PUBLIC_IP ${vertica_port}",
           "echo '[info] Vertica smoke test completed successfully at '$(date -Iseconds)"
         ]
       }
