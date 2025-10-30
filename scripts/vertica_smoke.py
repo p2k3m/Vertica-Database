@@ -22,6 +22,7 @@ from tests.wait_for_port import UNREACHABLE_ERRNOS, wait_for_port
 DEFAULT_TERRAFORM_DIR = REPO_ROOT / "infra"
 
 _DEFAULT_SENTINEL = object()
+CONNECTION_TIMEOUT_SECONDS = 5.0
 
 
 def _resolve_tlsmode() -> str:
@@ -124,6 +125,7 @@ def _connect_and_query(host: str, port: int) -> None:
         "password": credentials["password"],
         "database": "VMart",
         "tlsmode": _resolve_tlsmode(),
+        "connection_timeout": CONNECTION_TIMEOUT_SECONDS,
     }
 
     with vertica_python.connect(**config) as connection:

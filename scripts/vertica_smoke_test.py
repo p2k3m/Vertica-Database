@@ -27,6 +27,10 @@ import vertica_python
 
 DB_NAME = 'VMart'
 DB_PORT = 5433
+# Limit Vertica client connection attempts so unreachable endpoints do not hang
+# the smoke test for extended periods.  Five seconds balances responsiveness
+# with allowing transient network hiccups to recover.
+VERTICA_CLIENT_CONNECT_TIMEOUT_SECONDS = 5.0
 BOOTSTRAP_ADMIN_DEFAULT_USER = 'dbadmin'
 VERTICA_ADMIN_FALLBACK_UID = 500
 VERTICA_ADMIN_FALLBACK_GID = 500
@@ -5396,6 +5400,7 @@ def _ensure_primary_admin_user(
         'database': DB_NAME,
         'autocommit': True,
         'tlsmode': _resolve_tlsmode(),
+        'connection_timeout': VERTICA_CLIENT_CONNECT_TIMEOUT_SECONDS,
     }
 
     with vertica_python.connect(**config) as connection:
@@ -5461,6 +5466,7 @@ def connect_and_query(
         'database': DB_NAME,
         'autocommit': True,
         'tlsmode': _resolve_tlsmode(),
+        'connection_timeout': VERTICA_CLIENT_CONNECT_TIMEOUT_SECONDS,
     }
 
     last_error: Optional[BaseException] = None
@@ -5550,7 +5556,7 @@ def main() -> int:
     log(STEP_SEPARATOR)
     log(f'Creating smoke test user {smoke_user!r}')
     smoke_user_created = False
-    with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True, tlsmode=_resolve_tlsmode()) as admin_conn:
+    with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True, tlsmode=_resolve_tlsmode(), connection_timeout=VERTICA_CLIENT_CONNECT_TIMEOUT_SECONDS) as admin_conn:
         admin_cursor = admin_conn.cursor()
         admin_cursor.execute(
             f'CREATE USER {_quote_identifier(smoke_user)} IDENTIFIED BY %s',
@@ -5574,7 +5580,7 @@ def main() -> int:
         if smoke_user_created:
             log(STEP_SEPARATOR)
             log(f'Dropping smoke test user {smoke_user!r}')
-            with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True, tlsmode=_resolve_tlsmode()) as admin_conn:
+            with vertica_python.connect(host='127.0.0.1', port=DB_PORT, user=ADMIN_USER, password=ADMIN_PASSWORD, database=DB_NAME, autocommit=True, tlsmode=_resolve_tlsmode(), connection_timeout=VERTICA_CLIENT_CONNECT_TIMEOUT_SECONDS) as admin_conn:
                 admin_conn.cursor().execute(
                     f'DROP USER {_quote_identifier(smoke_user)} CASCADE'
                 )
