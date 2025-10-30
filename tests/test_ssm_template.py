@@ -17,3 +17,9 @@ def test_ssm_smoke_test_pip_installs_have_timeouts():
     assert template.count("'--no-input'") == 2
     assert 'timeout=120' in template
     assert 'subprocess.TimeoutExpired' in template
+
+
+def test_ssm_smoke_test_sets_imds_header_correctly():
+    template = Path('infra/ssm-smoke-test.json.tpl').read_text()
+
+    assert 'IMDS_HEADER=(-H \\"X-aws-ec2-metadata-token: $TOKEN\\")' in template
