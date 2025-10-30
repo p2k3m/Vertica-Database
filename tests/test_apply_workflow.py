@@ -20,3 +20,4 @@ def test_apply_workflow_reports_ssm_association_failures():
     assert 'aws ssm list-associations \\' in workflow
     assert 'describe-association-executions' in workflow
     assert 'describe-association-execution-targets' in workflow
+    assert 'describe-instance-associations-status' in workflow
