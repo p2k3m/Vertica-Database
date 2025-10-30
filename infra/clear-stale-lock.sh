@@ -2,7 +2,41 @@
 set -euo pipefail
 
 : "${AWS_REGION:=${AWS_DEFAULT_REGION:-}}" || true
-: "${AWS_REGION:?set AWS_REGION}" || exit 1
+
+determine_config_region() {
+  local profile="$1"
+  local profile_flag=()
+
+  if [[ -n "${profile}" ]]; then
+    profile_flag=(--profile "${profile}")
+  fi
+
+  local value
+  value=$(aws configure get region "${profile_flag[@]}" 2>/dev/null || true)
+  if [[ -z "${value}" || "${value}" == "None" ]]; then
+    value=$(aws configure get default.region "${profile_flag[@]}" 2>/dev/null || true)
+  fi
+
+  if [[ -n "${value}" && "${value}" != "None" ]]; then
+    printf '%s' "${value}"
+    return 0
+  fi
+
+  return 1
+}
+
+if [[ -z "${AWS_REGION}" ]] && command -v aws >/dev/null 2>&1; then
+  if guessed_region=$(determine_config_region "${AWS_PROFILE:-}" 2>/dev/null); then
+    AWS_REGION="${guessed_region}"
+  elif guessed_region=$(determine_config_region "" 2>/dev/null); then
+    AWS_REGION="${guessed_region}"
+  fi
+fi
+
+if [[ -z "${AWS_REGION}" ]]; then
+  echo "clear-stale-lock: AWS_REGION is not set and could not be determined" >&2
+  exit 1
+fi
 
 TABLE="tf-locks"
 KEY_PATH="state/terraform.tfstate"
