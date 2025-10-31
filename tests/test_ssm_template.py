@@ -22,7 +22,11 @@ def test_ssm_smoke_test_pip_installs_have_timeouts():
 def test_ssm_smoke_test_sets_imds_header_correctly():
     template = Path('infra/ssm-smoke-test.json.tpl').read_text()
 
-    assert 'IMDS_HEADER=(-H \\"X-aws-ec2-metadata-token: $TOKEN\\")' in template
+    assert "if [ -n \\\"$TOKEN\\\" ]; then" in template
+    assert '-H \\"X-aws-ec2-metadata-token: $TOKEN\\" http://169.254.169.254/latest/dynamic/instance-identity/document' in template
+    assert 'http://169.254.169.254/latest/dynamic/instance-identity/document || true)' in template
+    assert '-H \\"X-aws-ec2-metadata-token: $TOKEN\\" http://169.254.169.254/latest/meta-data/public-ipv4' in template
+    assert 'http://169.254.169.254/latest/meta-data/public-ipv4 || true)' in template
 
 
 def test_ssm_smoke_test_curl_commands_have_timeouts():
