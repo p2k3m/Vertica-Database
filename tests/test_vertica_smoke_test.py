@@ -2696,7 +2696,11 @@ def test_connect_and_query_nonfatal(monkeypatch):
         raise FakeErrorsModule.ConnectionError('boom')
 
     monkeypatch.setattr(smoke, 'log', fake_log)
-    monkeypatch.setattr(smoke, 'time', type('Module', (), {'sleep': lambda _: None}))
+    monkeypatch.setattr(
+        smoke,
+        'time',
+        SimpleNamespace(sleep=lambda _: None, time=lambda: 0.0),
+    )
     monkeypatch.setattr(
         smoke,
         'vertica_python',
@@ -2709,6 +2713,81 @@ def test_connect_and_query_nonfatal(monkeypatch):
 
     assert result is False
     assert any('Failed to connect to Vertica' in message for message in messages)
+
+
+def test_connect_and_query_deadline_limits_attempts(monkeypatch):
+    attempts: list[None] = []
+    messages: list[str] = []
+    current = {'value': 0.0}
+
+    class FakeErrorsModule:
+        class ConnectionError(Exception):
+            pass
+
+    def fake_time() -> float:
+        return current['value']
+
+    def fake_sleep(seconds: float) -> None:
+        current['value'] += seconds
+
+    def fake_log(message: str) -> None:
+        messages.append(message)
+
+    def fake_connect(**config):
+        attempts.append(None)
+        raise FakeErrorsModule.ConnectionError('boom')
+
+    monkeypatch.setattr(smoke, 'log', fake_log)
+    monkeypatch.setattr(
+        smoke,
+        'vertica_python',
+        type('Module', (), {'connect': fake_connect, 'errors': FakeErrorsModule}),
+    )
+    monkeypatch.setattr(
+        smoke,
+        'time',
+        SimpleNamespace(time=fake_time, sleep=fake_sleep),
+    )
+
+    deadline = fake_time() + 25.0
+    result = smoke.connect_and_query(
+        'label',
+        'host',
+        'user',
+        'password',
+        attempts=10,
+        delay=10.0,
+        fatal=False,
+        deadline=deadline,
+    )
+
+    assert result is False
+    assert len(attempts) == 3
+    assert current['value'] <= 25.0
+    assert any('Failed to connect to Vertica' in message for message in messages)
+
+
+def test_connect_and_query_deadline_raises_when_fatal(monkeypatch):
+    class FakeErrorsModule:
+        class ConnectionError(Exception):
+            pass
+
+    def fake_connect(**config):
+        raise FakeErrorsModule.ConnectionError('boom')
+
+    monkeypatch.setattr(
+        smoke,
+        'vertica_python',
+        type('Module', (), {'connect': fake_connect, 'errors': FakeErrorsModule}),
+    )
+    monkeypatch.setattr(
+        smoke,
+        'time',
+        SimpleNamespace(time=lambda: 100.0, sleep=lambda _seconds: None),
+    )
+
+    with pytest.raises(SystemExit, match='No time remaining'):
+        smoke.connect_and_query('label', 'host', 'user', 'password', deadline=100.0)
 
 
 def test_ecr_login_handles_aws_cli_failure(monkeypatch):
