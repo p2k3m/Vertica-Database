@@ -326,9 +326,9 @@ def _discover_admintools_license_targets(container: str) -> tuple[str, ...]:
         return cached[1]
 
     help_scripts = (
-        'set -e\n/opt/vertica/bin/admintools -t help',
-        'set -e\n/opt/vertica/bin/admintools --help',
-        'set -e\n/opt/vertica/bin/admintools -h',
+        'set -euo pipefail\n/opt/vertica/bin/admintools -t help',
+        'set -euo pipefail\n/opt/vertica/bin/admintools --help',
+        'set -euo pipefail\n/opt/vertica/bin/admintools -h',
     )
 
     targets: tuple[str, ...] = ()
@@ -462,9 +462,9 @@ def _discover_admintools_license_help_commands(
         return cached[1]
 
     help_scripts = (
-        'set -e\n/opt/vertica/bin/admintools license --help',
-        'set -e\n/opt/vertica/bin/admintools -t license --help',
-        'set -e\n/opt/vertica/bin/admintools --help',
+        'set -euo pipefail\n/opt/vertica/bin/admintools license --help',
+        'set -euo pipefail\n/opt/vertica/bin/admintools -t license --help',
+        'set -euo pipefail\n/opt/vertica/bin/admintools --help',
     )
 
     collected: list[str] = []
@@ -2469,7 +2469,7 @@ def _write_container_admintools_conf(container: str, target: str, content: str) 
     heredoc = '__VERTICA_ADMINTOOLS_CONF__'
     script = '\n'.join(
         [
-            'set -e',
+            'set -euo pipefail',
             f'if [ -e {quoted_parent} ] && [ ! -d {quoted_parent} ]; then rm -rf {quoted_parent}; fi',
             f'mkdir -p {quoted_parent}',
             f"cat <<'{heredoc}' > {quoted_target}",
@@ -3534,7 +3534,7 @@ def _deploy_vertica_license_fallback(
         quoted_destination = shlex.quote(destination)
         script = '\n'.join(
             (
-                'set -e',
+                'set -euo pipefail',
                 f'src={quoted_source}',
                 f'dest={quoted_destination}',
                 'dest_dir=$(dirname "$dest")',
@@ -3751,7 +3751,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         last_result: Optional[subprocess.CompletedProcess[str]] = None
 
         for command in commands:
-            script = 'set -e\n' + command
+            script = 'set -euo pipefail\n' + command
             result = _docker_exec_prefer_container_admin(
                 container,
                 ['sh', '-c', script],
