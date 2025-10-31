@@ -252,6 +252,12 @@ def _license_option_variants(
 
     quoted = shlex.quote(license_path)
 
+    # The legacy implementation attempted to enumerate every possible spelling of
+    # the Vertica license flag which resulted in thousands of candidate
+    # combinations once additional admintools targets were considered.  That
+    # approach dramatically increased smoke test execution time when admintools
+    # rejected each option in turn.  Restrict the recognised spellings to the
+    # commonly supported variants so the command matrix remains manageable.
     variants: list[str] = []
 
     if include_create_short_flag:
@@ -260,50 +266,22 @@ def _license_option_variants(
 
     variants.extend(
         [
-        f'-f {quoted}',
-        f'--file {quoted}',
-        f'--file={quoted}',
-        f'--license {quoted}',
-        f'--license={quoted}',
-        f'--license-file {quoted}',
-        f'--license-file={quoted}',
-        f'--licensefile {quoted}',
-        f'--licensefile={quoted}',
-        f'--license_file {quoted}',
-        f'--license_file={quoted}',
-        f'--license_path {quoted}',
-        f'--license_path={quoted}',
-        f'--license-path {quoted}',
-        f'--license-path={quoted}',
-        f'--licensepath {quoted}',
-        f'--licensepath={quoted}',
-        f'--license-file-path {quoted}',
-        f'--license-file-path={quoted}',
-        f'--license_file_path {quoted}',
-        f'--license_file_path={quoted}',
-        f'--licensefilepath {quoted}',
-        f'--licensefilepath={quoted}',
-        f'--licensekey {quoted}',
-        f'--licensekey={quoted}',
-        f'--license-key {quoted}',
-        f'--license-key={quoted}',
-        f'--key {quoted}',
-        f'--key={quoted}',
-        f'--path {quoted}',
-        f'--path={quoted}',
-        f'--install-license {quoted}',
-        f'--install-license={quoted}',
-        f'--install_license {quoted}',
-        f'--install_license={quoted}',
-        f'--add-license {quoted}',
-        f'--add-license={quoted}',
-        f'--add_license {quoted}',
-        f'--add_license={quoted}',
-        f'--apply-license {quoted}',
-        f'--apply-license={quoted}',
-        f'--apply_license {quoted}',
-        f'--apply_license={quoted}',
-        quoted,
+            f'-f {quoted}',
+            f'--file {quoted}',
+            f'--file={quoted}',
+            f'--license {quoted}',
+            f'--license={quoted}',
+            f'--license-file {quoted}',
+            f'--license-file={quoted}',
+            f'--license_file {quoted}',
+            f'--license_file={quoted}',
+            f'--license-key {quoted}',
+            f'--license-key={quoted}',
+            f'--license_key {quoted}',
+            f'--license_key={quoted}',
+            f'--key {quoted}',
+            f'--key={quoted}',
+            quoted,
         ]
     )
 
@@ -2044,11 +2022,6 @@ def _admintools_license_target_commands(
             commands.append(f'{base} --list')
             commands.append(f'{base} --action list')
 
-            for verb in ('status', 'show'):
-                commands.append(f'{base} -k {verb}')
-                commands.append(f'{base} --{verb}')
-                commands.append(f'{base} --action {verb}')
-
         return tuple(dict.fromkeys(commands))
 
     if action == 'install':
@@ -2061,11 +2034,6 @@ def _admintools_license_target_commands(
                 commands.append(f'{base} -k install {fragment}')
                 commands.append(f'{base} --install {fragment}')
                 commands.append(f'{base} --action install {fragment}')
-
-                for verb in ('add', 'apply', 'update', 'load', 'set'):
-                    commands.append(f'{base} -k {verb} {fragment}')
-                    commands.append(f'{base} --{verb} {fragment}')
-                    commands.append(f'{base} --action {verb} {fragment}')
 
         return tuple(dict.fromkeys(commands))
 
@@ -2122,19 +2090,9 @@ def _admintools_license_command_variants(
         commands.extend(
             f'{base_cli} license --action install {fragment}' for fragment in fragments
         )
-        commands.extend(f'{base_cli} license install {fragment}' for fragment in fragments)
-
-        for verb in ('add', 'apply', 'update', 'load', 'set'):
-            commands.extend(
-                f'{base_cli} license --{verb} {fragment}' for fragment in fragments
-            )
-            commands.extend(
-                f'{base_cli} license --action {verb} {fragment}'
-                for fragment in fragments
-            )
-            commands.extend(
-                f'{base_cli} license {verb} {fragment}' for fragment in fragments
-            )
+        commands.extend(
+            f'{base_cli} license install {fragment}' for fragment in fragments
+        )
     else:
         raise ValueError(f'Unsupported admintools license action: {action}')
 
