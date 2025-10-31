@@ -382,6 +382,16 @@ def test_run_admintools_license_command_supports_command_targets(monkeypatch):
     assert any('admintools manage_license --list' in cmd for cmd in commands)
 
 
+def test_admintools_license_command_variants_include_subcommands():
+    list_variants = smoke._admintools_license_command_variants('list')
+    assert any('-t license list' in command for command in list_variants)
+    install_variants = smoke._admintools_license_command_variants(
+        'install',
+        license_path='/data/vertica/config/license.key',
+    )
+    assert any('-t license install' in command for command in install_variants)
+
+
 def test_install_vertica_license_uses_fallback(monkeypatch):
     commands: list[str] = []
 
@@ -752,6 +762,54 @@ def test_attempt_creation_prefers_license_candidate(monkeypatch):
     assert commands[-1].splitlines()[-1].startswith(
         '/opt/vertica/bin/admintools -t create_db'
     )
+
+
+def test_attempt_creation_retries_after_invalid_license_status(monkeypatch):
+    monkeypatch.setattr(smoke, '_fetch_container_env', lambda container: {})
+    monkeypatch.setattr(
+        smoke,
+        '_discover_container_license_files',
+        lambda container: ['/data/vertica/config/license.key'],
+    )
+
+    statuses = iter(
+        [
+            smoke.LicenseStatus(True, False),
+            smoke.LicenseStatus(True, True),
+        ]
+    )
+
+    monkeypatch.setattr(
+        smoke,
+        '_ensure_vertica_license_installed',
+        lambda container: next(statuses),
+    )
+
+    responses = [
+        SimpleNamespace(
+            returncode=1,
+            stdout='',
+            stderr=(
+                'Error: License key /data/vertica/config/license.key not installed.\n'
+                'Invalid license status\n'
+            ),
+        ),
+        SimpleNamespace(returncode=0, stdout='Created', stderr=''),
+    ]
+
+    commands: list[str] = []
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        commands.append(command[-1])
+        return responses.pop(0)
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is True
+    assert len(commands) == 2
+    first_command = commands[0].splitlines()[-1]
+    assert first_command.startswith('/opt/vertica/bin/admintools -t create_db')
+    assert '-l ' in first_command or '-l=' in first_command
 
 
 def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):
