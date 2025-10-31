@@ -258,20 +258,24 @@ def _license_option_variants(
 
     quoted = shlex.quote(license_path)
 
-    # The legacy implementation attempted to enumerate every possible spelling of
-    # the Vertica license flag which resulted in thousands of candidate
-    # combinations once additional admintools targets were considered.  That
-    # approach dramatically increased smoke test execution time when admintools
-    # rejected each option in turn.  Restrict the recognised spellings to the
-    # commonly supported variants so the command matrix remains manageable.
+    # Prioritise the flag spellings observed in modern Vertica releases.  The
+    # historic implementation attempted to brute-force every imaginable variant,
+    # but that prevented us from reaching the combinations that actually work
+    # before the unknown-command retry limit was exceeded.
     variants: list[str] = [
-        f'-l {quoted}',
-        f'-l={quoted}',
-        f'-L {quoted}',
-        f'-L={quoted}',
+        f'--file {quoted}',
+        f'--license {quoted}',
+        f'-f {quoted}',
+        quoted,
     ]
 
     if include_create_short_flag:
+        variants[:0] = [
+            f'-l {quoted}',
+            f'-l={quoted}',
+            f'-L {quoted}',
+            f'-L={quoted}',
+        ]
         variants.extend(
             [
                 f'-k {quoted}',
@@ -280,51 +284,6 @@ def _license_option_variants(
                 f'-K={quoted}',
             ]
         )
-
-    variants.extend(
-        [
-            f'-f {quoted}',
-            f'--file {quoted}',
-            f'--file={quoted}',
-            f'--File {quoted}',
-            f'--File={quoted}',
-            f'--file-path {quoted}',
-            f'--file-path={quoted}',
-            f'--file_path {quoted}',
-            f'--file_path={quoted}',
-            f'--filePath {quoted}',
-            f'--filePath={quoted}',
-            f'--license {quoted}',
-            f'--license={quoted}',
-            f'--License {quoted}',
-            f'--License={quoted}',
-            f'--license-path {quoted}',
-            f'--license-path={quoted}',
-            f'--license-file {quoted}',
-            f'--license-file={quoted}',
-            f'--license_file {quoted}',
-            f'--license_file={quoted}',
-            f'--licenseFile {quoted}',
-            f'--licenseFile={quoted}',
-            f'--licensePath {quoted}',
-            f'--licensePath={quoted}',
-            f'--license-key {quoted}',
-            f'--license-key={quoted}',
-            f'--license_key {quoted}',
-            f'--license_key={quoted}',
-            f'--licenseKey {quoted}',
-            f'--licenseKey={quoted}',
-            f'--key {quoted}',
-            f'--key={quoted}',
-            f'--key-file {quoted}',
-            f'--key-file={quoted}',
-            f'--key_file {quoted}',
-            f'--key_file={quoted}',
-            f'--keyfile {quoted}',
-            f'--keyfile={quoted}',
-            quoted,
-        ]
-    )
 
     # Preserve ordering while removing duplicates.
     return tuple(dict.fromkeys(variants))
@@ -2089,23 +2048,25 @@ def _admintools_license_target_commands(
         commands: list[str] = []
         install_subcommands = (
             'install',
-            'add',
-            'apply',
-            'update',
-            'load',
             'set',
-            'deploy',
             'register',
         )
 
+        fragments = _license_option_variants(license_path)
+
         for base in bases:
-            for fragment in _license_option_variants(license_path):
+            for fragment in fragments:
                 commands.append(f'{base} {fragment}'.strip())
-                for subcommand in install_subcommands:
-                    commands.append(f'{base} -k {subcommand} {fragment}')
-                    commands.append(f'{base} --{subcommand} {fragment}')
-                    commands.append(f'{base} --action {subcommand} {fragment}')
-                    commands.append(f'{base} {subcommand} {fragment}')
+
+            for subcommand in install_subcommands:
+                for fragment in fragments:
+                    commands.append(f'{base} --{subcommand} {fragment}'.strip())
+                for fragment in fragments:
+                    commands.append(f'{base} --action {subcommand} {fragment}'.strip())
+                for fragment in fragments:
+                    commands.append(f'{base} -k {subcommand} {fragment}'.strip())
+                for fragment in fragments:
+                    commands.append(f'{base} {subcommand} {fragment}'.strip())
 
         return tuple(dict.fromkeys(commands))
 
@@ -2155,12 +2116,7 @@ def _admintools_license_command_variants(
         fragments = _license_option_variants(license_path)
         install_subcommands = (
             'install',
-            'add',
-            'apply',
-            'update',
-            'load',
             'set',
-            'deploy',
             'register',
         )
 
