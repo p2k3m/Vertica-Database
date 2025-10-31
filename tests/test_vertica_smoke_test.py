@@ -431,6 +431,31 @@ def test_run_admintools_license_command_retries_on_fatal_with_unknown(monkeypatc
     assert commands == ['first', 'second']
 
 
+def test_run_admintools_license_command_limits_unknown_attempts(monkeypatch):
+    commands: list[str] = []
+    logs: list[str] = []
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        commands.append(command[-1])
+        return SimpleNamespace(returncode=1, stdout='', stderr='Unknown tool install_license')
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+    monkeypatch.setattr(smoke, 'log', logs.append)
+
+    result = smoke._run_admintools_license_command(
+        'vertica_ce',
+        tuple(f'command-{index}' for index in range(100)),
+        'missing docker',
+        action='install',
+        license_path='/data/vertica/config/license.key',
+    )
+
+    assert result is not None
+    assert result.returncode == 1
+    assert len(commands) == smoke._ADMINTOOLS_LICENSE_UNKNOWN_ATTEMPT_LIMIT
+    assert any('repeated unknown responses' in message for message in logs)
+
+
 def test_admintools_license_command_variants_include_subcommands():
     list_variants = smoke._admintools_license_command_variants('list')
     assert any('-t license list' in command for command in list_variants)

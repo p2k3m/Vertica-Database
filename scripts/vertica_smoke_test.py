@@ -231,6 +231,8 @@ _ADMINTOOLS_FATAL_LICENSE_PATTERNS: tuple[str, ...] = (
     'unhandled exception during admintools operation',
 )
 
+_ADMINTOOLS_LICENSE_UNKNOWN_ATTEMPT_LIMIT = 32
+
 _ADMINTOOLS_LICENSE_TARGET_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
 _ADMINTOOLS_LICENSE_TARGET_CACHE_TTL_SECONDS = 300.0
 _ADMINTOOLS_HELP_LICENSE_PATTERN = re.compile(
@@ -2135,10 +2137,6 @@ def _admintools_license_command_variants(
         if license_path is None:
             raise ValueError('license_path must be provided for install action')
         fragments = _license_option_variants(license_path)
-        commands.extend(
-            f'{base_cli} -t install_license {fragment}' for fragment in fragments
-        )
-
         install_subcommands = (
             'install',
             'add',
@@ -2150,6 +2148,9 @@ def _admintools_license_command_variants(
             'register',
         )
 
+        commands.extend(
+            f'{base_cli} license {fragment}' for fragment in fragments
+        )
         for subcommand in install_subcommands:
             commands.extend(
                 f'{base_cli} license --{subcommand} {fragment}'
@@ -2163,6 +2164,9 @@ def _admintools_license_command_variants(
                 f'{base_cli} license {subcommand} {fragment}'
                 for fragment in fragments
             )
+        commands.extend(
+            f'{base_cli} -t install_license {fragment}' for fragment in fragments
+        )
     else:
         raise ValueError(f'Unsupported admintools license action: {action}')
 
@@ -2200,6 +2204,7 @@ def _run_admintools_license_command(
     attempted: set[str] = set()
     last_result: Optional[subprocess.CompletedProcess[str]] = None
     unknown_tool_encountered = False
+    unknown_attempts = 0
     extra_targets_added = False
     help_commands_added = False
 
@@ -2245,6 +2250,17 @@ def _run_admintools_license_command(
                 return result
 
             unknown_tool_encountered = True
+            unknown_attempts += 1
+
+            if (
+                action is not None
+                and unknown_attempts >= _ADMINTOOLS_LICENSE_UNKNOWN_ATTEMPT_LIMIT
+            ):
+                log(
+                    'admintools reported repeated unknown responses while handling '
+                    f'license action {action!r}; stopping further command variants'
+                )
+                return result
 
         if not unknown_tool_encountered or action is None:
             return last_result
