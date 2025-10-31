@@ -227,6 +227,10 @@ _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'list index out of range',
 )
 
+_ADMINTOOLS_FATAL_LICENSE_PATTERNS: tuple[str, ...] = (
+    'unhandled exception during admintools operation',
+)
+
 _ADMINTOOLS_LICENSE_TARGET_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
 _ADMINTOOLS_LICENSE_TARGET_CACHE_TTL_SECONDS = 300.0
 _ADMINTOOLS_HELP_LICENSE_PATTERN = re.compile(
@@ -2160,6 +2164,9 @@ def _run_admintools_license_command(
                 return result
 
             combined = f"{result.stdout}\n{result.stderr}".lower()
+
+            if any(pattern in combined for pattern in _ADMINTOOLS_FATAL_LICENSE_PATTERNS):
+                return result
 
             if not any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
                 return result

@@ -239,6 +239,37 @@ def test_run_admintools_license_command_falls_back(monkeypatch):
     assert commands[1].endswith('license --list')
 
 
+def test_run_admintools_license_command_stops_on_fatal_error(monkeypatch):
+    commands: list[str] = []
+
+    fatal_message = 'Unhandled exception during admintools operation\nlist index out of range'
+
+    responses = [
+        SimpleNamespace(returncode=1, stdout=fatal_message, stderr=''),
+        SimpleNamespace(returncode=0, stdout='should not run', stderr=''),
+    ]
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        commands.append(command[-1])
+        return responses.pop(0)
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    result = smoke._run_admintools_license_command(
+        'vertica_ce',
+        (
+            '/opt/vertica/bin/admintools -t list_license',
+            '/opt/vertica/bin/admintools license --list',
+        ),
+        'missing docker',
+        action='list',
+    )
+
+    assert result is not None
+    assert result.returncode == 1
+    assert commands == ['/opt/vertica/bin/admintools -t list_license']
+
+
 def test_parse_admintools_help_for_license_targets():
     output = textwrap.dedent(
         '''
