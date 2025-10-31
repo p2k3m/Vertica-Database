@@ -16,6 +16,21 @@ os.environ.setdefault('ADMIN_PASSWORD', 'test-password')
 smoke = importlib.import_module('scripts.vertica_smoke_test')
 
 
+def _command_contains_license_option(command: str, license_path: str) -> bool:
+    normalized = command.replace('\n', ' ')
+    fragments = (
+        f'-l {license_path}',
+        f'-l={license_path}',
+        f'-L {license_path}',
+        f'-L={license_path}',
+        f'-k {license_path}',
+        f'-k={license_path}',
+        f'-K {license_path}',
+        f'-K={license_path}',
+    )
+    return any(fragment in normalized for fragment in fragments)
+
+
 @pytest.fixture(autouse=True)
 def _disable_container_restart(monkeypatch):
     monkeypatch.setattr(smoke, '_restart_vertica_container', lambda *args, **kwargs: False)
@@ -797,7 +812,7 @@ def test_attempt_creation_prefers_license_candidate(monkeypatch):
 
     assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is True
     assert any(
-        '-l /opt/vertica/config/license.key' in cmd.replace('\n', ' ')
+        _command_contains_license_option(cmd, '/opt/vertica/config/license.key')
         for cmd in commands
     )
     assert commands[-1].splitlines()[-1].startswith(
@@ -850,7 +865,11 @@ def test_attempt_creation_retries_after_invalid_license_status(monkeypatch):
     assert len(commands) == 2
     first_command = commands[0].splitlines()[-1]
     assert first_command.startswith('/opt/vertica/bin/admintools -t create_db')
-    assert '-l ' in first_command or '-l=' in first_command
+    assert any(
+        token in {'-l', '-L', '-k', '-K'}
+        or token.startswith(('-l=', '-L=', '-k=', '-K='))
+        for token in first_command.split()
+    )
 
 
 def test_ensure_vertica_respects_unhealthy_grace(monkeypatch):

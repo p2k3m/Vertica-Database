@@ -269,6 +269,16 @@ def _license_option_variants(
         f'-L={quoted}',
     ]
 
+    if include_create_short_flag:
+        variants.extend(
+            [
+                f'-k {quoted}',
+                f'-k={quoted}',
+                f'-K {quoted}',
+                f'-K={quoted}',
+            ]
+        )
+
     variants.extend(
         [
             f'-f {quoted}',
