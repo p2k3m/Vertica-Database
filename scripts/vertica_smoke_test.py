@@ -2032,19 +2032,22 @@ def _admintools_license_target_commands(
 ) -> tuple[str, ...]:
     """Return admintools invocations for ``target`` handling ``action``."""
 
-    base = f'/opt/vertica/bin/admintools -t {target}'
+    bases = (
+        f'/opt/vertica/bin/admintools -t {target}',
+        f'/opt/vertica/bin/admintools {target}',
+    )
 
     if action == 'list':
-        commands = [
-            f'{base} -k list',
-            f'{base} --list',
-            f'{base} --action list',
-        ]
+        commands: list[str] = []
+        for base in bases:
+            commands.append(f'{base} -k list')
+            commands.append(f'{base} --list')
+            commands.append(f'{base} --action list')
 
-        for verb in ('status', 'show'):
-            commands.append(f'{base} -k {verb}')
-            commands.append(f'{base} --{verb}')
-            commands.append(f'{base} --action {verb}')
+            for verb in ('status', 'show'):
+                commands.append(f'{base} -k {verb}')
+                commands.append(f'{base} --{verb}')
+                commands.append(f'{base} --action {verb}')
 
         return tuple(dict.fromkeys(commands))
 
@@ -2053,15 +2056,16 @@ def _admintools_license_target_commands(
             raise ValueError('license_path must be provided for install action')
 
         commands: list[str] = []
-        for fragment in _license_option_variants(license_path):
-            commands.append(f'{base} -k install {fragment}')
-            commands.append(f'{base} --install {fragment}')
-            commands.append(f'{base} --action install {fragment}')
+        for base in bases:
+            for fragment in _license_option_variants(license_path):
+                commands.append(f'{base} -k install {fragment}')
+                commands.append(f'{base} --install {fragment}')
+                commands.append(f'{base} --action install {fragment}')
 
-            for verb in ('add', 'apply', 'update', 'load', 'set'):
-                commands.append(f'{base} -k {verb} {fragment}')
-                commands.append(f'{base} --{verb} {fragment}')
-                commands.append(f'{base} --action {verb} {fragment}')
+                for verb in ('add', 'apply', 'update', 'load', 'set'):
+                    commands.append(f'{base} -k {verb} {fragment}')
+                    commands.append(f'{base} --{verb} {fragment}')
+                    commands.append(f'{base} --action {verb} {fragment}')
 
         return tuple(dict.fromkeys(commands))
 
