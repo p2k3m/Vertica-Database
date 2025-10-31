@@ -337,6 +337,22 @@ class LicenseStatus(NamedTuple):
     verified: bool
 
 
+def _license_environment_exports(license_path: str) -> tuple[str, ...]:
+    """Return shell ``export`` statements for Vertica license environment vars."""
+
+    quoted = shlex.quote(license_path)
+    variables = (
+        "VERTICA_DB_LICENSE",
+        "VERTICA_DB_LICENSE_FILE",
+        "VERTICA_LICENSE",
+        "VERTICA_LICENSE_FILE",
+        "VERTICA_LICENSE_PATH",
+        "LICENSE_FILE",
+    )
+
+    return tuple(f"export {variable}={quoted}" for variable in variables)
+
+
 def _parse_admintools_help_for_license_targets(output: str) -> tuple[str, ...]:
     """Extract possible admintools license targets from ``output``."""
 
@@ -3821,9 +3837,10 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         fragments = _license_option_variants(
             license_path, include_create_short_flag=True
         )
-        commands = [
+        commands = [base_command]
+        commands.extend(
             f'{base_command} {fragment}'.strip() for fragment in fragments
-        ]
+        )
         return tuple(dict.fromkeys(commands))
 
     def _run_create(
@@ -3833,7 +3850,11 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         last_result: Optional[subprocess.CompletedProcess[str]] = None
 
         for command in commands:
-            script = 'set -euo pipefail\n' + command
+            script_lines = ['set -euo pipefail']
+            if license_path:
+                script_lines.extend(_license_environment_exports(license_path))
+            script_lines.append(command.strip())
+            script = '\n'.join(script_lines)
             result = _docker_exec_prefer_container_admin(
                 container,
                 ['sh', '-c', script],
