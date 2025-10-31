@@ -449,9 +449,8 @@ jobs:
           last_details = None
           last_status_emit = 0.0
           plugin_state: dict[str, tuple[str, int | None, str | None]] = {}
-          log_stream_name: str | None = None
-          next_token: str | None = None
-          printed_events: set[tuple[int, str]] = set()
+          log_stream_tokens: dict[str, str | None] = {}
+          printed_events: set[tuple[str, int, str]] = set()
           final_invocation: dict | None = None
           
           while time.monotonic() < deadline:
@@ -515,53 +514,53 @@ jobs:
                                   print(f'    [plugin] {line}', flush=True)
           
               if log_group:
-                  if not log_stream_name:
-                      streams = aws_cli_json(
-                          [
-                              'logs',
-                              'describe-log-streams',
-                              '--log-group-name',
-                              log_group,
-                              '--log-stream-name-prefix',
-                              f'{command_id}/{instance_id}',
-                          ],
-                          allow_failure=True,
-                          default={'logStreams': []},
-                      )
-                      for stream in streams.get('logStreams', []):
-                          candidate = stream.get('logStreamName')
-                          if candidate:
-                              log_stream_name = candidate
-                              log(f'Discovered CloudWatch Logs stream: {log_stream_name}')
-                              break
-
-              if log_stream_name:
-                  log_events_args = [
-                      'logs',
-                      'get-log-events',
-                      '--log-group-name',
-                      log_group,
-                      '--log-stream-name',
-                      log_stream_name,
-                  ]
-                  if next_token:
-                      log_events_args.extend(['--next-token', next_token])
-                  else:
-                      log_events_args.append('--start-from-head')
-
-                  events_data = aws_cli_json(
-                      log_events_args,
+                  streams = aws_cli_json(
+                      [
+                          'logs',
+                          'describe-log-streams',
+                          '--log-group-name',
+                          log_group,
+                          '--log-stream-name-prefix',
+                          f'{command_id}/{instance_id}',
+                      ],
                       allow_failure=True,
-                      default=None,
+                      default={'logStreams': []},
                   )
-                  if events_data:
+                  for stream in streams.get('logStreams', []):
+                      candidate = stream.get('logStreamName')
+                      if candidate and candidate not in log_stream_tokens:
+                          log_stream_tokens[candidate] = None
+                          log(f'Discovered CloudWatch Logs stream: {candidate}')
+
+                  for stream_name, token in list(log_stream_tokens.items()):
+                      log_events_args = [
+                          'logs',
+                          'get-log-events',
+                          '--log-group-name',
+                          log_group,
+                          '--log-stream-name',
+                          stream_name,
+                      ]
+                      if token:
+                          log_events_args.extend(['--next-token', token])
+                      else:
+                          log_events_args.append('--start-from-head')
+
+                      events_data = aws_cli_json(
+                          log_events_args,
+                          allow_failure=True,
+                          default=None,
+                      )
+                      if not events_data:
+                          continue
+
                       next_forward = events_data.get('nextForwardToken')
                       if next_forward:
-                          next_token = next_forward
+                          log_stream_tokens[stream_name] = next_forward
                       for event in events_data.get('events', []):
                           timestamp = event.get('timestamp')
                           message = (event.get('message') or '').rstrip('\n')
-                          key = (timestamp or 0, message)
+                          key = (stream_name, timestamp or 0, message)
                           if key in printed_events:
                               continue
                           printed_events.add(key)
