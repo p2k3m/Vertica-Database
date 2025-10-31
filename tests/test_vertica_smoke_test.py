@@ -1,5 +1,6 @@
 import importlib
 import os
+import shlex
 import subprocess
 import textwrap
 from datetime import datetime, timedelta, timezone
@@ -28,7 +29,28 @@ def _command_contains_license_option(command: str, license_path: str) -> bool:
         f'-K {license_path}',
         f'-K={license_path}',
     )
-    return any(fragment in normalized for fragment in fragments)
+    if any(fragment in normalized for fragment in fragments):
+        return True
+
+    quoted = shlex.quote(license_path)
+    export_prefixes = (
+        'export VERTICA_DB_LICENSE=',
+        'export VERTICA_DB_LICENSE_FILE=',
+        'export VERTICA_LICENSE=',
+        'export VERTICA_LICENSE_FILE=',
+        'export VERTICA_LICENSE_PATH=',
+        'export LICENSE_FILE=',
+    )
+
+    for line in command.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        for prefix in export_prefixes:
+            if stripped.startswith(prefix) and quoted in stripped:
+                return True
+
+    return False
 
 
 @pytest.fixture(autouse=True)
@@ -888,12 +910,12 @@ def test_attempt_creation_retries_after_invalid_license_status(monkeypatch):
 
     assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is True
     assert len(commands) == 2
-    first_command = commands[0].splitlines()[-1]
-    assert first_command.startswith('/opt/vertica/bin/admintools -t create_db')
-    assert any(
-        token in {'-l', '-L', '-k', '-K'}
-        or token.startswith(('-l=', '-L=', '-k=', '-K='))
-        for token in first_command.split()
+    first_command = commands[0]
+    assert first_command.splitlines()[-1].startswith(
+        '/opt/vertica/bin/admintools -t create_db'
+    )
+    assert _command_contains_license_option(
+        first_command, '/data/vertica/config/license.key'
     )
 
 
