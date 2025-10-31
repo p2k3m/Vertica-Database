@@ -58,6 +58,14 @@ STEP_SEPARATOR = '=' * 72
 # generous grace period before attempting restarts so we do not thrash the
 # container during long but successful bootstraps.
 UNHEALTHY_HEALTHCHECK_GRACE_PERIOD_SECONDS = 900.0
+# The SSM document that invokes this smoke test grants a 30 minute execution
+# window. Reserve a small buffer so that the command finishes before the
+# Systems Manager plugin times out even when recovery steps consume most of the
+# allowance.
+SMOKE_TEST_OVERALL_TIMEOUT_SECONDS = 1740.0
+SMOKE_TEST_CONTAINER_RESERVE_SECONDS = 300.0
+SMOKE_TEST_PORT_RESERVE_SECONDS = 180.0
+SMOKE_TEST_MINIMUM_RESERVE_SECONDS = 60.0
 # During the first bootstrap Vertica is responsible for populating
 # ``admintools.conf`` inside the persistent data directory.  If the file is
 # still missing several minutes after the container is running we treat the
@@ -5353,6 +5361,63 @@ def wait_for_port(host: str, port: int, timeout: float = 600.0) -> None:
     )
 
 
+def _remaining_seconds(deadline: float) -> float:
+    return max(0.0, deadline - time.time())
+
+
+def _deadline_limited_timeout(
+    desired: float,
+    *,
+    deadline: float,
+    reserve: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    remaining = _remaining_seconds(deadline)
+    budget = max(0.0, remaining - reserve)
+    if budget <= 0.0:
+        return 0.0
+    limited = min(desired, budget)
+    if limited < minimum:
+        return limited
+    return min(maximum, limited)
+
+
+def _ensure_time_budget(deadline: float, *, reserve: float, context: str) -> None:
+    remaining = _remaining_seconds(deadline)
+    if remaining <= reserve:
+        raise SystemExit(
+            'Smoke test exhausted its time budget '
+            f'{context}; remaining {remaining:.0f}s with reserve '
+            f'{reserve:.0f}s'
+        )
+
+
+def _sleep_with_deadline(delay: float, deadline: Optional[float]) -> None:
+    if delay <= 0:
+        return
+    if deadline is None:
+        time.sleep(delay)
+        return
+    remaining = deadline - time.time()
+    if remaining <= 0:
+        return
+    time.sleep(min(delay, remaining))
+
+
+def _connection_attempt_budget(
+    deadline: Optional[float], delay: float, attempts: int
+) -> int:
+    if deadline is None:
+        return attempts
+    remaining = _remaining_seconds(deadline)
+    if remaining <= 0:
+        return 0
+    per_attempt = max(delay, VERTICA_CLIENT_CONNECT_TIMEOUT_SECONDS)
+    allowed = int(remaining // per_attempt) + 1
+    return max(1, min(attempts, allowed))
+
+
 def _bootstrap_admin_credentials() -> tuple[str, str]:
     """Return the Vertica bootstrap administrator credentials."""
 
@@ -5472,6 +5537,7 @@ def connect_and_query(
     attempts: int = 30,
     delay: float = 10.0,
     fatal: bool = True,
+    deadline: Optional[float] = None,
 ) -> bool:
     log(STEP_SEPARATOR)
     log(f'[{label}] Connecting to Vertica at {host}:{DB_PORT} as {user!r}')
@@ -5488,7 +5554,17 @@ def connect_and_query(
 
     last_error: Optional[BaseException] = None
 
-    for attempt in range(1, attempts + 1):
+    max_attempts = _connection_attempt_budget(deadline, delay, attempts)
+    if max_attempts == 0:
+        message = (
+            f'[{label}] No time remaining to attempt Vertica connection before deadline'
+        )
+        if fatal:
+            raise SystemExit(message)
+        log(message)
+        return False
+
+    for attempt in range(1, max_attempts + 1):
         try:
             with vertica_python.connect(**config) as connection:
                 cursor = connection.cursor()
@@ -5502,14 +5578,26 @@ def connect_and_query(
                 return True
         except Exception as exc:  # pragma: no cover - runtime failure path
             last_error = exc
-            if attempt >= attempts:
+            if attempt >= max_attempts:
                 break
 
+            remaining_display = ''
+            if deadline is not None:
+                remaining_display = f'; ~{_remaining_seconds(deadline):.0f}s until deadline'
+
+            remaining_attempts = max_attempts - attempt
+            sleep_duration = delay
+            if deadline is not None:
+                sleep_duration = min(delay, max(0.0, deadline - time.time()))
+
             log(
-                f'[{label}] Connection attempt {attempt} failed with {exc!r}; '
-                f'retrying in {delay:.0f}s ({attempts - attempt} attempt(s) remaining)'
+                f'[{label}] Connection attempt {attempt} failed with {exc!r}'
+                f'{remaining_display}; retrying in {sleep_duration:.0f}s '
+                f'({remaining_attempts} attempt(s) remaining)'
             )
-            time.sleep(delay)
+            if sleep_duration <= 0:
+                continue
+            _sleep_with_deadline(sleep_duration, deadline)
 
     if last_error:
         message = f'[{label}] Failed to connect to Vertica: {last_error}'
@@ -5523,6 +5611,7 @@ def connect_and_query(
 
 def main() -> int:
     log('Beginning in-instance Vertica smoke test with detailed diagnostics')
+    overall_deadline = time.time() + SMOKE_TEST_OVERALL_TIMEOUT_SECONDS
     hostname = socket.gethostname()
     local_ipv4 = fetch_metadata('meta-data/local-ipv4')
     public_ipv4 = fetch_metadata('meta-data/public-ipv4')
@@ -5532,10 +5621,34 @@ def main() -> int:
 
     ensure_docker_service()
     _sanitize_vertica_data_directories()
-    ensure_vertica_container_running(timeout=1500.0)
+    container_timeout = _deadline_limited_timeout(
+        1500.0,
+        deadline=overall_deadline,
+        reserve=SMOKE_TEST_CONTAINER_RESERVE_SECONDS,
+        minimum=60.0,
+        maximum=1500.0,
+    )
+    ensure_vertica_container_running(timeout=container_timeout)
+    _ensure_time_budget(
+        overall_deadline,
+        reserve=SMOKE_TEST_PORT_RESERVE_SECONDS,
+        context='after ensuring Vertica container readiness',
+    )
     log(STEP_SEPARATOR)
     log('Waiting for Vertica port 5433 to accept TCP connections on localhost')
-    wait_for_port('127.0.0.1', DB_PORT, timeout=600.0)
+    port_timeout = _deadline_limited_timeout(
+        600.0,
+        deadline=overall_deadline,
+        reserve=SMOKE_TEST_PORT_RESERVE_SECONDS,
+        minimum=30.0,
+        maximum=600.0,
+    )
+    wait_for_port('127.0.0.1', DB_PORT, timeout=port_timeout)
+    _ensure_time_budget(
+        overall_deadline,
+        reserve=SMOKE_TEST_MINIMUM_RESERVE_SECONDS,
+        context='after waiting for Vertica port 5433',
+    )
     log('Verified Vertica port 5433 is accepting TCP connections on localhost')
 
     run_command(['docker', 'ps', '--format', '{{.Names}}\t{{.Status}}'])
@@ -5549,12 +5662,22 @@ def main() -> int:
 
     bootstrap_user, bootstrap_password = _bootstrap_admin_credentials()
     connect_and_query(
-        f'{bootstrap_user}@localhost', '127.0.0.1', bootstrap_user, bootstrap_password
+        f'{bootstrap_user}@localhost',
+        '127.0.0.1',
+        bootstrap_user,
+        bootstrap_password,
+        deadline=overall_deadline,
     )
     _ensure_primary_admin_user(
         bootstrap_user, bootstrap_password, ADMIN_USER, ADMIN_PASSWORD
     )
-    connect_and_query('primary_admin@localhost', '127.0.0.1', ADMIN_USER, ADMIN_PASSWORD)
+    connect_and_query(
+        'primary_admin@localhost',
+        '127.0.0.1',
+        ADMIN_USER,
+        ADMIN_PASSWORD,
+        deadline=overall_deadline,
+    )
 
     if not connect_and_query(
         f'{bootstrap_user}@public_ip',
@@ -5562,6 +5685,7 @@ def main() -> int:
         bootstrap_user,
         bootstrap_password,
         fatal=False,
+        deadline=overall_deadline,
     ):
         log(
             f'[{bootstrap_user}@public_ip] Connection attempts failed; continuing without '
@@ -5592,7 +5716,13 @@ def main() -> int:
         smoke_user_created = True
 
     try:
-        connect_and_query('smoke_user@localhost', '127.0.0.1', smoke_user, smoke_pass)
+        connect_and_query(
+            'smoke_user@localhost',
+            '127.0.0.1',
+            smoke_user,
+            smoke_pass,
+            deadline=overall_deadline,
+        )
     finally:
         if smoke_user_created:
             log(STEP_SEPARATOR)
