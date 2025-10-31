@@ -2025,6 +2025,7 @@ def _admintools_license_target_commands(
             commands.append(f'{base} -k list')
             commands.append(f'{base} --list')
             commands.append(f'{base} --action list')
+            commands.append(f'{base} list')
 
         return tuple(dict.fromkeys(commands))
 
@@ -2038,6 +2039,7 @@ def _admintools_license_target_commands(
                 commands.append(f'{base} -k install {fragment}')
                 commands.append(f'{base} --install {fragment}')
                 commands.append(f'{base} --action install {fragment}')
+                commands.append(f'{base} install {fragment}')
 
         return tuple(dict.fromkeys(commands))
 
@@ -3815,7 +3817,10 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
     raw_output = f"{result.stdout}\n{result.stderr}"
     combined = raw_output.lower()
     license_error = 'license' in combined and (
-        'not been installed' in combined or 'no license' in combined
+        'not been installed' in combined
+        or 'not installed' in combined
+        or 'no license' in combined
+        or 'invalid license status' in combined
     )
 
     if license_error:
