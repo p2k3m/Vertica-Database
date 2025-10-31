@@ -317,6 +317,40 @@ def test_run_admintools_license_command_discovers_help_targets(monkeypatch):
     assert any(cmd.endswith('license_keys -k list') for cmd in commands)
 
 
+def test_run_admintools_license_command_supports_command_targets(monkeypatch):
+    commands: list[str] = []
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        assert container == 'vertica_ce'
+        commands.append(command[-1])
+        script = command[-1]
+
+        if 'admintools manage_license --list' in script and ' -t ' not in script:
+            return SimpleNamespace(returncode=0, stdout='installed', stderr='')
+
+        if '-t manage_license' in script:
+            return SimpleNamespace(returncode=1, stdout='', stderr='Unknown tool manage_license')
+
+        if 'license' in script:
+            return SimpleNamespace(returncode=1, stdout='', stderr='Unknown command license')
+
+        return SimpleNamespace(returncode=1, stdout='', stderr='Unknown tool list_license')
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    result = smoke._run_admintools_license_command(
+        'vertica_ce',
+        smoke._admintools_license_command_variants('list'),
+        'missing docker',
+        action='list',
+    )
+
+    assert result is not None
+    assert result.returncode == 0
+    assert any('admintools -t manage_license --list' in cmd for cmd in commands)
+    assert any('admintools manage_license --list' in cmd for cmd in commands)
+
+
 def test_install_vertica_license_uses_fallback(monkeypatch):
     commands: list[str] = []
 
