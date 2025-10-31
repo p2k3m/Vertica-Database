@@ -158,6 +158,14 @@ def test_container_reports_eula_prompt(monkeypatch):
         smoke._EULA_PROMPT_LOG_CACHE.pop('vertica_ce', None)
 
 
+def test_log_indicates_eula_prompt_keyword_detection():
+    message = "Management Console EULA acceptance required. Please accept the license"
+    assert smoke._log_indicates_eula_prompt(message)
+
+    not_prompt = "EULA already accepted successfully"
+    assert not smoke._log_indicates_eula_prompt(not_prompt)
+
+
 def test_detect_container_python_executable_prefers_known_path(monkeypatch):
     commands: list[list[str]] = []
 

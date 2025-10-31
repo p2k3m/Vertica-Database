@@ -183,6 +183,12 @@ _VERTICA_CONFIG_SAME_FILE_RECOVERY_RETRY_SECONDS = 180.0
 _EULA_PROMPT_LOG_PATTERNS: tuple[str, ...] = (
     "Output is not a tty --- can't reliably display EULA",
 )
+_EULA_PROMPT_KEYWORD_SETS: tuple[tuple[str, ...], ...] = (
+    ("eula", "accept", "required"),
+    ("eula", "acceptance", "required"),
+    ("license", "accept", "required"),
+    ("eula", "prompt"),
+)
 _EULA_PROMPT_LOG_CACHE: dict[str, tuple[float, bool]] = {}
 _EULA_PROMPT_LOG_TTL_SECONDS = 30.0
 
@@ -3073,6 +3079,19 @@ def _container_reports_config_same_file_issue(container: str) -> bool:
     return detected
 
 
+def _log_indicates_eula_prompt(message: str) -> bool:
+    """Return ``True`` when ``message`` suggests an unattended EULA prompt."""
+
+    if any(pattern in message for pattern in _EULA_PROMPT_LOG_PATTERNS):
+        return True
+
+    lowered = message.lower()
+    return any(
+        all(keyword in lowered for keyword in keywords)
+        for keywords in _EULA_PROMPT_KEYWORD_SETS
+    )
+
+
 def _container_reports_eula_prompt(container: str) -> bool:
     """Return ``True`` when Vertica logs show an unattended EULA prompt."""
 
@@ -3100,9 +3119,7 @@ def _container_reports_eula_prompt(container: str) -> bool:
                 output_parts.append(result.stderr)
             if output_parts:
                 combined = '\n'.join(part.rstrip() for part in output_parts)
-                detected = any(
-                    pattern in combined for pattern in _EULA_PROMPT_LOG_PATTERNS
-                )
+                detected = _log_indicates_eula_prompt(combined)
 
     _EULA_PROMPT_LOG_CACHE[container] = (now, detected)
     return detected
