@@ -424,6 +424,8 @@ def test_admintools_license_command_variants_include_subcommands():
         license_path='/data/vertica/config/license.key',
     )
     assert any('-t license install' in command for command in install_variants)
+    assert any('license --set' in command for command in install_variants)
+    assert any('license register' in command for command in install_variants)
 
 
 def test_install_vertica_license_uses_fallback(monkeypatch):
