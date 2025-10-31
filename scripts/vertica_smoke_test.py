@@ -262,11 +262,10 @@ def _license_option_variants(
     # approach dramatically increased smoke test execution time when admintools
     # rejected each option in turn.  Restrict the recognised spellings to the
     # commonly supported variants so the command matrix remains manageable.
-    variants: list[str] = []
-
-    if include_create_short_flag:
-        variants.append(f'-l {quoted}')
-        variants.append(f'-l={quoted}')
+    variants: list[str] = [
+        f'-l {quoted}',
+        f'-l={quoted}',
+    ]
 
     variants.extend(
         [
@@ -2036,6 +2035,7 @@ def _admintools_license_target_commands(
         commands: list[str] = []
         for base in bases:
             for fragment in _license_option_variants(license_path):
+                commands.append(f'{base} {fragment}'.strip())
                 commands.append(f'{base} -k install {fragment}')
                 commands.append(f'{base} --install {fragment}')
                 commands.append(f'{base} --action install {fragment}')
