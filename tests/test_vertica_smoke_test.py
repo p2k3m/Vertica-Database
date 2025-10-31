@@ -443,7 +443,12 @@ def test_install_vertica_license_uses_fallback(monkeypatch):
 
     assert smoke._install_vertica_license('vertica_ce') is True
     assert any(
-        'license --install' in cmd or 'license install' in cmd for cmd in commands
+        (
+            ' -t license ' in cmd
+            or ' license ' in cmd
+        )
+        and 'install_license' not in cmd
+        for cmd in commands
     )
 
 
