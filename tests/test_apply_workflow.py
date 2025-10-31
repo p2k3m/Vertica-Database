@@ -22,3 +22,11 @@ def test_apply_workflow_reports_ssm_association_failures():
     assert 'describe-association-executions' in workflow
     assert 'describe-association-execution-targets' in workflow
     assert 'describe-instance-associations-status' in workflow
+
+
+def test_apply_workflow_tails_all_cloudwatch_streams():
+    workflow = Path('.github/workflows/apply.yml').read_text()
+
+    assert 'log_stream_tokens: dict[str, str | None] = {}' in workflow
+    assert 'for stream_name, token in list(log_stream_tokens.items()):' in workflow
+    assert "key = (stream_name, timestamp or 0, message)" in workflow
