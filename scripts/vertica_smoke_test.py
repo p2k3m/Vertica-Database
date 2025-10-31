@@ -2166,11 +2166,18 @@ def _run_admintools_license_command(
                 return result
 
             combined = f"{result.stdout}\n{result.stderr}".lower()
+            fatal = any(
+                pattern in combined for pattern in _ADMINTOOLS_FATAL_LICENSE_PATTERNS
+            )
+            unknown = any(
+                pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
+            )
 
-            if any(pattern in combined for pattern in _ADMINTOOLS_FATAL_LICENSE_PATTERNS):
-                return result
+            if fatal:
+                if 'list index out of range' in combined or not unknown:
+                    return result
 
-            if not any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
+            if not unknown:
                 return result
 
             unknown_tool_encountered = True

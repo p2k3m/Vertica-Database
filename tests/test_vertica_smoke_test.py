@@ -382,6 +382,40 @@ def test_run_admintools_license_command_supports_command_targets(monkeypatch):
     assert any('admintools manage_license --list' in cmd for cmd in commands)
 
 
+def test_run_admintools_license_command_retries_on_fatal_with_unknown(monkeypatch):
+    commands: list[str] = []
+
+    responses = [
+        SimpleNamespace(
+            returncode=1,
+            stdout='',
+            stderr=(
+                'Unhandled exception during admintools operation\n'
+                'ATMain.py: error: no such option: --list'
+            ),
+        ),
+        SimpleNamespace(returncode=0, stdout='installed', stderr=''),
+    ]
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        assert container == 'vertica_ce'
+        commands.append(command[-1])
+        return responses.pop(0)
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    result = smoke._run_admintools_license_command(
+        'vertica_ce',
+        ('first', 'second'),
+        'missing docker',
+        action='list',
+    )
+
+    assert result is not None
+    assert result.returncode == 0
+    assert commands == ['first', 'second']
+
+
 def test_admintools_license_command_variants_include_subcommands():
     list_variants = smoke._admintools_license_command_variants('list')
     assert any('-t license list' in command for command in list_variants)
