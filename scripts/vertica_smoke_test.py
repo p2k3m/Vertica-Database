@@ -3510,15 +3510,14 @@ def _install_vertica_license(container: str) -> bool:
         return False
 
     for path in license_paths:
-        quoted = shlex.quote(path)
         log(f'Attempting to install Vertica license from {path}')
         result = _run_admintools_license_command(
             container,
-            _admintools_license_command_variants('install', license_path=quoted),
+            _admintools_license_command_variants('install', license_path=path),
             'Docker CLI is not available while installing Vertica license',
             allow_root_fallback=False,
             action='install',
-            license_path=quoted,
+            license_path=path,
         )
 
         if result is None:
