@@ -977,7 +977,7 @@ def test_ensure_vertica_license_installed_handles_verification_index_error(monke
 
     status = smoke._ensure_vertica_license_installed('vertica_ce')
 
-    assert status.installed is True
+    assert status.installed is False
     assert status.verified is False
     assert installs == ['vertica_ce']
     assert responses == []
@@ -994,7 +994,7 @@ def test_attempt_creation_prefers_license_candidate(monkeypatch):
         return ['/opt/vertica/config/license.key']
 
     def fake_ensure(container: str) -> smoke.LicenseStatus:
-        return smoke.LicenseStatus(False, False)
+        return smoke.LicenseStatus(True, False)
 
     responses = [
         SimpleNamespace(returncode=1, stdout='', stderr='Unknown option --license'),
@@ -1031,7 +1031,7 @@ def test_attempt_creation_retries_when_license_required(monkeypatch):
         return ['/opt/vertica/config/license.key']
 
     def fake_ensure(container: str) -> smoke.LicenseStatus:
-        return smoke.LicenseStatus(False, False)
+        return smoke.LicenseStatus(True, False)
 
     responses = [
         SimpleNamespace(
@@ -1112,6 +1112,39 @@ def test_attempt_creation_retries_after_invalid_license_status(monkeypatch):
     )
     assert _command_contains_license_option(
         first_command, '/data/vertica/config/license.key'
+    )
+
+
+def test_attempt_creation_skips_when_license_installation_failed(monkeypatch):
+    monkeypatch.setattr(smoke, '_fetch_container_env', lambda container: {})
+    monkeypatch.setattr(
+        smoke,
+        '_discover_container_license_files',
+        lambda container: ['/opt/vertica/config/license.key'],
+    )
+
+    monkeypatch.setattr(
+        smoke,
+        '_ensure_vertica_license_installed',
+        lambda container: smoke.LicenseStatus(False, False),
+    )
+
+    commands: list[str] = []
+
+    def fake_exec(container, command, message, allow_root_fallback=True):  # pragma: no cover - should not run
+        commands.append(command[-1])
+        return SimpleNamespace(returncode=0, stdout='unexpected', stderr='')
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    logs: list[str] = []
+    monkeypatch.setattr(smoke, 'log', logs.append)
+
+    assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is False
+    assert commands == []
+    assert any(
+        'Skipping Vertica database creation because license installation failed' in entry
+        for entry in logs
     )
 
 
