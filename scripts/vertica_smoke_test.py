@@ -2214,9 +2214,8 @@ def _run_admintools_license_command(
                 pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
             )
 
-            if fatal:
-                if 'list index out of range' in combined or not unknown:
-                    return result
+            if fatal and not unknown:
+                return result
 
             if not unknown:
                 return result
