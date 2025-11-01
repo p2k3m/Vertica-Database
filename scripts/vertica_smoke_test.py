@@ -318,8 +318,13 @@ def _license_option_variants(
     # but that prevented us from reaching the combinations that actually work
     # before the unknown-command retry limit was exceeded.
     variants: list[str] = [
+        quoted,
+        f'--path {quoted}',
+        f'--path={quoted}',
         f'--file {quoted}',
         f'--file={quoted}',
+        f'-f {quoted}',
+        f'-f={quoted}',
         f'--license {quoted}',
         f'--license={quoted}',
         f'--license-path {quoted}',
@@ -336,11 +341,6 @@ def _license_option_variants(
         f'--licensekey={quoted}',
         f'--key {quoted}',
         f'--key={quoted}',
-        f'--path {quoted}',
-        f'--path={quoted}',
-        f'-f {quoted}',
-        f'-f={quoted}',
-        quoted,
     ]
 
     if include_create_short_flag:
