@@ -2253,6 +2253,7 @@ def _run_admintools_license_command(
     commands_to_try: list[str] = list(commands)
     attempted: set[str] = set()
     last_result: Optional[subprocess.CompletedProcess[str]] = None
+    index_error_result: Optional[subprocess.CompletedProcess[str]] = None
     unknown_tool_encountered = False
     unknown_attempts = 0
     extra_targets_added = False
@@ -2291,10 +2292,13 @@ def _run_admintools_license_command(
             unknown = any(
                 pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
             )
+            index_error = _admintools_output_indicates_index_error(combined)
 
-            if fatal:
-                if not unknown or _admintools_output_indicates_index_error(combined):
-                    return result
+            if index_error and index_error_result is None:
+                index_error_result = result
+
+            if fatal and not index_error and not unknown:
+                return result
 
             if unknown:
                 unknown_tool_encountered = True
@@ -2313,12 +2317,17 @@ def _run_admintools_license_command(
                 continue
 
             if fatal:
+                if index_error:
+                    continue
+                return result
+
+            if fatal:
                 return result
 
             return result
 
         if not unknown_tool_encountered or action is None:
-            return last_result
+            return index_error_result or last_result
 
         unknown_tool_encountered = False
         expanded = False
@@ -2350,7 +2359,7 @@ def _run_admintools_license_command(
                     expanded = True
 
         if not expanded:
-            return last_result
+            return index_error_result or last_result
 
 
 def _align_container_path_identity(
