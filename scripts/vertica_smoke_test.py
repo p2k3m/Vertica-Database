@@ -2060,9 +2060,6 @@ def _admintools_license_target_commands(
         commands: list[str] = []
         for base in bases:
             commands.append(f'{base} -k list')
-            commands.append(f'{base} --list')
-            commands.append(f'{base} --action list')
-            commands.append(f'{base} --action=list')
             commands.append(f'{base} list')
 
         return tuple(dict.fromkeys(commands))
@@ -2086,16 +2083,7 @@ def _admintools_license_target_commands(
 
             for subcommand in install_subcommands:
                 for fragment in fragments:
-                    commands.append(f'{base} --{subcommand} {fragment}'.strip())
-                for fragment in fragments:
-                    commands.append(f'{base} --{subcommand}={fragment}'.strip())
-                for fragment in fragments:
-                    commands.append(f'{base} --action {subcommand} {fragment}'.strip())
-                for fragment in fragments:
-                    commands.append(f'{base} --action={subcommand} {fragment}'.strip())
-                for fragment in fragments:
                     commands.append(f'{base} -k {subcommand} {fragment}'.strip())
-                for fragment in fragments:
                     commands.append(f'{base} {subcommand} {fragment}'.strip())
 
         return tuple(dict.fromkeys(commands))
@@ -2135,9 +2123,7 @@ def _admintools_license_command_variants(
         commands.extend(
             (
                 f'{base_cli} -t list_license',
-                f'{base_cli} license --list',
-                f'{base_cli} license --action list',
-                f'{base_cli} license --action=list',
+                f'{base_cli} license -k list',
                 f'{base_cli} license list',
             )
         )
@@ -2152,32 +2138,20 @@ def _admintools_license_command_variants(
         )
 
         commands.extend(
+            f'{base_cli} -t install_license {fragment}' for fragment in fragments
+        )
+        commands.extend(
             f'{base_cli} license {fragment}' for fragment in fragments
         )
         for subcommand in install_subcommands:
             commands.extend(
-                f'{base_cli} license --{subcommand} {fragment}'
-                for fragment in fragments
-            )
-            commands.extend(
-                f'{base_cli} license --{subcommand}={fragment}'
-                for fragment in fragments
-            )
-            commands.extend(
-                f'{base_cli} license --action {subcommand} {fragment}'
-                for fragment in fragments
-            )
-            commands.extend(
-                f'{base_cli} license --action={subcommand} {fragment}'
+                f'{base_cli} license -k {subcommand} {fragment}'
                 for fragment in fragments
             )
             commands.extend(
                 f'{base_cli} license {subcommand} {fragment}'
                 for fragment in fragments
             )
-        commands.extend(
-            f'{base_cli} -t install_license {fragment}' for fragment in fragments
-        )
     else:
         raise ValueError(f'Unsupported admintools license action: {action}')
 
