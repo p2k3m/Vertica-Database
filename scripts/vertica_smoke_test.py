@@ -227,6 +227,27 @@ _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'list index out of range',
 )
 
+_ADMINTOOLS_UNKNOWN_LICENSE_RECOVERABLE_PATTERNS: tuple[str, ...] = (
+    'unknown tool',
+    'unknown command',
+    'unknown option',
+    'unrecognized option',
+    'unrecognised option',
+    'invalid argument',
+    'invalid option',
+    'unrecognized argument',
+    'unrecognised argument',
+    'unrecognized arguments',
+    'unrecognised arguments',
+    'unexpected argument',
+    'unexpected option',
+    'unexpected arguments',
+    'not recognized',
+    'not recognised',
+    'no such option',
+    'no such command',
+)
+
 _ADMINTOOLS_FATAL_LICENSE_PATTERNS: tuple[str, ...] = (
     'unhandled exception during admintools operation',
 )
@@ -2226,25 +2247,34 @@ def _run_admintools_license_command(
             unknown = any(
                 pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
             )
+            recoverable_unknown = any(
+                pattern in combined
+                for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_RECOVERABLE_PATTERNS
+            )
+
+            if fatal and unknown and not recoverable_unknown:
+                return result
+
+            if unknown:
+                unknown_tool_encountered = True
+                unknown_attempts += 1
+
+                if (
+                    action is not None
+                    and unknown_attempts >= _ADMINTOOLS_LICENSE_UNKNOWN_ATTEMPT_LIMIT
+                ):
+                    log(
+                        'admintools reported repeated unknown responses while handling '
+                        f'license action {action!r}; stopping further command variants'
+                    )
+                    return result
+
+                continue
 
             if fatal:
                 return result
 
-            if not unknown:
-                return result
-
-            unknown_tool_encountered = True
-            unknown_attempts += 1
-
-            if (
-                action is not None
-                and unknown_attempts >= _ADMINTOOLS_LICENSE_UNKNOWN_ATTEMPT_LIMIT
-            ):
-                log(
-                    'admintools reported repeated unknown responses while handling '
-                    f'license action {action!r}; stopping further command variants'
-                )
-                return result
+            return result
 
         if not unknown_tool_encountered or action is None:
             return last_result
