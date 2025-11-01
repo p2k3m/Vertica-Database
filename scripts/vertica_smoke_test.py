@@ -3857,9 +3857,9 @@ def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
     if _admintools_output_indicates_index_error(combined_verification):
         log(
             'admintools license verification encountered an internal IndexError; '
-            'assuming license installation succeeded but cannot verify'
+            'treating license installation as failed'
         )
-        return LicenseStatus(True, False)
+        return LicenseStatus(False, False)
 
     if any(
         pattern in combined_verification
@@ -3891,6 +3891,13 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
     license_candidates = _discover_container_license_files(container)
     license_status = _ensure_vertica_license_installed(container)
     license_verified = license_status.verified
+
+    if not license_status.installed:
+        log(
+            'Skipping Vertica database creation because license installation '
+            'failed'
+        )
+        return False
 
     log(
         'Invoking Vertica admintools to create database '
