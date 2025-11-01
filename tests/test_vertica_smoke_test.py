@@ -276,14 +276,13 @@ def test_run_admintools_license_command_falls_back(monkeypatch):
     assert commands[1].endswith('license -k list')
 
 
-def test_run_admintools_license_command_retries_on_index_error_fatal(monkeypatch):
+def test_run_admintools_license_command_stops_on_index_error_fatal(monkeypatch):
     commands: list[str] = []
 
     fatal_message = 'Unhandled exception during admintools operation\nlist index out of range'
 
     responses = [
         SimpleNamespace(returncode=1, stdout=fatal_message, stderr=''),
-        SimpleNamespace(returncode=0, stdout='installed', stderr=''),
     ]
 
     def fake_exec(container, command, message, allow_root_fallback=True):
@@ -303,10 +302,9 @@ def test_run_admintools_license_command_retries_on_index_error_fatal(monkeypatch
     )
 
     assert result is not None
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert commands == [
         '/opt/vertica/bin/admintools -t list_license',
-        '/opt/vertica/bin/admintools license -k list',
     ]
 
 
