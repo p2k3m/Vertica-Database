@@ -3856,11 +3856,17 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
 
     def _run_create(
         license_path: Optional[str] = None,
+        *,
+        use_license_flag: bool,
     ) -> Optional[subprocess.CompletedProcess[str]]:
-        commands = _create_command_variants(license_path)
+        command_variants = (
+            _create_command_variants(license_path)
+            if use_license_flag and license_path
+            else (base_command,)
+        )
         last_result: Optional[subprocess.CompletedProcess[str]] = None
 
-        for command in commands:
+        for command in command_variants:
             script_lines = ['set -euo pipefail']
             if license_path:
                 script_lines.extend(_license_environment_exports(license_path))
@@ -3882,7 +3888,8 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
 
             combined_attempt = f"{result.stdout}\n{result.stderr}".lower()
             if (
-                license_path is not None
+                use_license_flag
+                and license_path is not None
                 and any(
                     pattern in combined_attempt
                     for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
@@ -3903,21 +3910,24 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
 
         return last_result
 
-    initial_attempts: list[Optional[str]] = []
+    initial_attempts: list[tuple[Optional[str], bool]] = []
 
     if not license_verified and license_candidates:
-        initial_attempts.append(license_candidates[0])
+        first_candidate = license_candidates[0]
+        initial_attempts.append((first_candidate, True))
+        initial_attempts.append((first_candidate, False))
 
-    initial_attempts.append(None)
+    initial_attempts.append((None, False))
 
     result: Optional[subprocess.CompletedProcess[str]] = None
-    attempted: set[Optional[str]] = set()
+    attempted: set[tuple[Optional[str], bool]] = set()
 
-    for license_path in initial_attempts:
-        if license_path in attempted:
+    for license_path, use_license_flag in initial_attempts:
+        key = (license_path, use_license_flag)
+        if key in attempted:
             continue
-        attempted.add(license_path)
-        result = _run_create(license_path)
+        attempted.add(key)
+        result = _run_create(license_path, use_license_flag=use_license_flag)
         if result is None:
             return False
         if result.returncode == 0:
@@ -3925,7 +3935,8 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
             return True
         combined_attempt = f"{result.stdout}\n{result.stderr}".lower()
         if (
-            license_path is not None
+            use_license_flag
+            and license_path is not None
             and any(
                 pattern in combined_attempt
                 for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
@@ -3933,7 +3944,8 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         ):
             log(
                 'admintools reported that the create_db command does not support '
-                'the supplied license flag; retrying without explicit license path'
+                'the supplied license flag; retrying without explicit flag while '
+                'preserving license environment variables'
             )
             continue
         break
@@ -3958,7 +3970,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         error_paths = _extract_license_error_paths(raw_output)
         if license_verified or _ensure_vertica_license_installed(container).installed:
             log('Retrying Vertica database creation after installing license')
-            retry_result = _run_create()
+            retry_result = _run_create(None, use_license_flag=False)
             if retry_result is not None and retry_result.returncode == 0:
                 log('Requested Vertica database creation inside container; waiting for recovery')
                 return True
@@ -3980,7 +3992,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                         'Retrying Vertica database creation after seeding license '
                         'paths reported by admintools'
                     )
-                    retry_result = _run_create()
+                    retry_result = _run_create(None, use_license_flag=False)
                     if retry_result is not None and retry_result.returncode == 0:
                         log(
                             'Requested Vertica database creation inside container; '
@@ -3992,7 +4004,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
 
         for path in license_candidates:
             log(f'Retrying Vertica database creation using license file {path}')
-            retry_result = _run_create(path)
+            retry_result = _run_create(path, use_license_flag=True)
             if retry_result is not None:
                 if retry_result.returncode == 0:
                     log('Requested Vertica database creation inside container; waiting for recovery')
@@ -4004,9 +4016,25 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                 ):
                     log(
                         'admintools reported that the create_db command does not '
-                        'support the supplied license flag; stopping license retries'
+                        'support the supplied license flag; retrying without explicit '
+                        'flag while preserving license environment variables'
                     )
-                    break
+                    env_retry = _run_create(path, use_license_flag=False)
+                    if env_retry is None:
+                        return False
+                    if env_retry.returncode == 0:
+                        log(
+                            'Requested Vertica database creation inside container; '
+                            'waiting for recovery'
+                        )
+                        return True
+                    combined_env = f"{env_retry.stdout}\n{env_retry.stderr}".lower()
+                    if any(
+                        pattern in combined_env
+                        for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
+                    ):
+                        break
+                    combined_retry = combined_env
 
     log(
         'Vertica database creation command exited with '
