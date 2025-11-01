@@ -526,7 +526,7 @@ def test_admintools_license_command_variants_include_subcommands():
     assert any('-t license install' in command for command in install_variants)
     assert any('license register' in command for command in install_variants)
     assert any('license -k install' in command for command in install_variants)
-    assert any('--install --file' in command for command in install_variants)
+    assert any('license install --file' in command for command in install_variants)
     assert any('license_keys' in command for command in install_variants)
     assert any('upgrade_license_key' in command for command in install_variants)
 
