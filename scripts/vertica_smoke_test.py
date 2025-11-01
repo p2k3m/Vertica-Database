@@ -270,7 +270,17 @@ _ADMINTOOLS_HELP_LICENSE_PATTERN = re.compile(
 
 _ADMINTOOLS_LICENSE_HELP_KEYWORDS: dict[str, tuple[str, ...]] = {
     'list': ('list', 'show', 'status', 'display', 'view'),
-    'install': ('install', 'add', 'apply', 'update', 'load', 'set', 'deploy', 'register'),
+    'install': (
+        'install',
+        'add',
+        'apply',
+        'update',
+        'load',
+        'set',
+        'deploy',
+        'register',
+        'upgrade',
+    ),
 }
 _ADMINTOOLS_LICENSE_HELP_COMMAND_CACHE: dict[
     tuple[str, str, Optional[str]],
@@ -470,15 +480,18 @@ def _admintools_license_help_action_commands(
 
     base_cli = '/opt/vertica/bin/admintools license'
 
+    def _normalise_fragment(value: str) -> str:
+        if value.startswith('--'):
+            stripped = value.lstrip('-')
+            return f"--{stripped.lower()}" if stripped else value
+        return value.lower()
+
     if action == 'list':
         for fragment in fragments:
-            _add(f'{base_cli} {fragment}')
-            if fragment.startswith('--'):
-                normalised = fragment.lstrip('-')
-                _add(f'{base_cli} --action {normalised}')
-            else:
-                _add(f'{base_cli} --{fragment}')
-                _add(f'{base_cli} --action {fragment}')
+            normalised = _normalise_fragment(fragment)
+            _add(f'{base_cli} {normalised}')
+            if not normalised.startswith('--'):
+                _add(f'{base_cli} --{normalised}')
 
         return tuple(commands)
 
@@ -490,19 +503,20 @@ def _admintools_license_help_action_commands(
         quoted_path = shlex.quote(license_path)
 
         for fragment in fragments:
-            _add(f'{base_cli} {fragment}')
+            normalised = _normalise_fragment(fragment)
+            _add(f'{base_cli} {normalised}')
 
             for option in fragments_with_path:
-                _add(f'{base_cli} {fragment} {option}')
-                _add(f'{base_cli} {option} {fragment}')
+                _add(f'{base_cli} {normalised} {option}')
+                _add(f'{base_cli} {option} {normalised}')
 
-            if fragment.endswith('='):
-                _add(f'{base_cli} {fragment}{quoted_path}')
-            elif fragment.startswith('--'):
-                _add(f'{base_cli} {fragment} {quoted_path}')
-                _add(f'{base_cli} {fragment}={quoted_path}')
+            if normalised.endswith('='):
+                _add(f'{base_cli} {normalised}{quoted_path}')
+            elif normalised.startswith('--'):
+                _add(f'{base_cli} {normalised} {quoted_path}')
+                _add(f'{base_cli} {normalised}={quoted_path}')
             else:
-                _add(f'{base_cli} {fragment} {quoted_path}')
+                _add(f'{base_cli} {normalised} {quoted_path}')
 
         return tuple(commands)
 
@@ -2084,11 +2098,21 @@ def _admintools_license_target_commands(
         f'/opt/vertica/bin/admintools {target}',
     )
 
+    normalised_target = target.replace('-', '_').lower()
+    supports_subcommands = normalised_target not in {
+        'license_audit',
+        'licenseaudit',
+        'upgrade_license_key',
+        'upgradelicensekey',
+    }
+
     if action == 'list':
         commands: list[str] = []
         for base in bases:
-            commands.append(f'{base} -k list')
+            commands.append(base)
             commands.append(f'{base} list')
+            if supports_subcommands:
+                commands.append(f'{base} -k list')
 
         return tuple(dict.fromkeys(commands))
 
@@ -2121,10 +2145,15 @@ def _admintools_license_target_commands(
                 for fragment in fragments:
                     commands.append(f'{base} {flag} {fragment}'.strip())
 
-            for subcommand in install_subcommands:
-                for fragment in fragments:
-                    commands.append(f'{base} -k {subcommand} {fragment}'.strip())
-                    commands.append(f'{base} {subcommand} {fragment}'.strip())
+            if supports_subcommands:
+                for subcommand in install_subcommands:
+                    for fragment in fragments:
+                        commands.append(
+                            f'{base} {subcommand} {fragment}'.strip()
+                        )
+                        commands.append(
+                            f'{base} -k {subcommand} {fragment}'.strip()
+                        )
 
         return tuple(dict.fromkeys(commands))
 
@@ -2156,6 +2185,10 @@ def _admintools_license_command_variants(
         'license_keys',
         'license-keys',
         'licensekeys',
+        'license_audit',
+        'license-audit',
+        'upgrade_license_key',
+        'upgrade-license-key',
     )
 
     commands: list[str] = []
@@ -2165,9 +2198,10 @@ def _admintools_license_command_variants(
     if action == 'list':
         commands.extend(
             (
+                f'{base_cli} -t license_audit',
                 f'{base_cli} -t list_license',
-                f'{base_cli} license -k list',
                 f'{base_cli} license list',
+                f'{base_cli} license -k list',
             )
         )
     elif action == 'install':
@@ -2199,15 +2233,15 @@ def _admintools_license_command_variants(
 
         for subcommand in install_subcommands:
             commands.extend(
+                f'{base_cli} license {subcommand} {fragment}'
+                for fragment in fragments
+            )
+            commands.extend(
                 f'{base_cli} -t license -k {subcommand} {fragment}'
                 for fragment in fragments
             )
             commands.extend(
                 f'{base_cli} license -k {subcommand} {fragment}'
-                for fragment in fragments
-            )
-            commands.extend(
-                f'{base_cli} license {subcommand} {fragment}'
                 for fragment in fragments
             )
 
@@ -2216,6 +2250,12 @@ def _admintools_license_command_variants(
         )
         commands.extend(
             f'{base_cli} license {fragment}' for fragment in fragments
+        )
+        commands.extend(
+            f'{base_cli} -t upgrade_license_key {fragment}' for fragment in fragments
+        )
+        commands.extend(
+            f'{base_cli} upgrade_license_key {fragment}' for fragment in fragments
         )
     else:
         raise ValueError(f'Unsupported admintools license action: {action}')

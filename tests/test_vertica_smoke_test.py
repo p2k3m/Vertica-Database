@@ -272,8 +272,8 @@ def test_run_admintools_license_command_falls_back(monkeypatch):
 
     assert result is not None
     assert result.returncode == 0
-    assert commands[0].endswith('list_license')
-    assert commands[1].endswith('license -k list')
+    assert commands[0].endswith('license_audit')
+    assert commands[1].endswith('list_license')
 
 
 def test_run_admintools_license_command_retries_after_index_error(monkeypatch):
@@ -515,6 +515,7 @@ def test_run_admintools_license_command_limits_unknown_attempts(monkeypatch):
 
 def test_admintools_license_command_variants_include_subcommands():
     list_variants = smoke._admintools_license_command_variants('list')
+    assert any('license_audit' in command for command in list_variants)
     assert any('-t license -k list' in command for command in list_variants)
     assert any('license list' in command for command in list_variants)
     assert any('license_keys -k list' in command for command in list_variants)
@@ -527,6 +528,29 @@ def test_admintools_license_command_variants_include_subcommands():
     assert any('license -k install' in command for command in install_variants)
     assert any('--install --file' in command for command in install_variants)
     assert any('license_keys' in command for command in install_variants)
+    assert any('upgrade_license_key' in command for command in install_variants)
+
+
+def test_admintools_license_target_commands_skip_subcommands_for_audit():
+    commands = smoke._admintools_license_target_commands(
+        'license_audit',
+        'list',
+        None,
+    )
+    assert '/opt/vertica/bin/admintools -t license_audit' in commands
+    assert '/opt/vertica/bin/admintools license_audit list' in commands
+    assert all('-k list' not in command for command in commands)
+
+
+def test_admintools_license_target_commands_skip_subcommands_for_upgrade():
+    commands = smoke._admintools_license_target_commands(
+        'upgrade_license_key',
+        'install',
+        '/data/vertica/config/license.key',
+    )
+    assert any('--license' in command for command in commands)
+    assert any('--file' in command for command in commands)
+    assert all('-k install' not in command for command in commands)
 
 
 def test_license_option_variants_include_extended_flags():
