@@ -1045,8 +1045,13 @@ def test_attempt_creation_prefers_license_candidate(monkeypatch):
         _command_contains_license_option(cmd, '/opt/vertica/config/license.key')
         for cmd in commands
     )
-    assert commands[-1].splitlines()[-1].startswith(
-        '/opt/vertica/bin/admintools -t create_db'
+    assert any(
+        line.splitlines()[-1].startswith('/opt/vertica/bin/admintools -t create_db')
+        for line in commands
+    )
+    assert any(
+        '-c ' in line.splitlines()[-1] and '-D ' in line.splitlines()[-1]
+        for line in commands
     )
 
 
@@ -1090,6 +1095,8 @@ def test_attempt_creation_retries_when_license_required(monkeypatch):
     second = commands[1].splitlines()[-1]
     assert first.startswith('/opt/vertica/bin/admintools -t create_db')
     assert second.startswith('/opt/vertica/bin/admintools -t create_db')
+    assert '-c ' in first and '-D ' in first
+    assert '-c ' in second and '-D ' in second
     assert _command_contains_license_option(second, '/opt/vertica/config/license.key')
 
 
@@ -1140,6 +1147,8 @@ def test_attempt_creation_retries_after_invalid_license_status(monkeypatch):
     assert first_command.splitlines()[-1].startswith(
         '/opt/vertica/bin/admintools -t create_db'
     )
+    assert '-c ' in first_command.splitlines()[-1]
+    assert '-D ' in first_command.splitlines()[-1]
     assert _command_contains_license_option(
         first_command, '/data/vertica/config/license.key'
     )
