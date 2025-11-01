@@ -273,6 +273,22 @@ def _license_option_variants(
         f'--file={quoted}',
         f'--license {quoted}',
         f'--license={quoted}',
+        f'--license-path {quoted}',
+        f'--license-path={quoted}',
+        f'--license_path {quoted}',
+        f'--license_path={quoted}',
+        f'--license-file {quoted}',
+        f'--license-file={quoted}',
+        f'--licensefile {quoted}',
+        f'--licensefile={quoted}',
+        f'--license-key {quoted}',
+        f'--license-key={quoted}',
+        f'--licensekey {quoted}',
+        f'--licensekey={quoted}',
+        f'--key {quoted}',
+        f'--key={quoted}',
+        f'--path {quoted}',
+        f'--path={quoted}',
         f'-f {quoted}',
         f'-f={quoted}',
         quoted,
@@ -2046,6 +2062,7 @@ def _admintools_license_target_commands(
             commands.append(f'{base} -k list')
             commands.append(f'{base} --list')
             commands.append(f'{base} --action list')
+            commands.append(f'{base} --action=list')
             commands.append(f'{base} list')
 
         return tuple(dict.fromkeys(commands))
@@ -2071,7 +2088,11 @@ def _admintools_license_target_commands(
                 for fragment in fragments:
                     commands.append(f'{base} --{subcommand} {fragment}'.strip())
                 for fragment in fragments:
+                    commands.append(f'{base} --{subcommand}={fragment}'.strip())
+                for fragment in fragments:
                     commands.append(f'{base} --action {subcommand} {fragment}'.strip())
+                for fragment in fragments:
+                    commands.append(f'{base} --action={subcommand} {fragment}'.strip())
                 for fragment in fragments:
                     commands.append(f'{base} -k {subcommand} {fragment}'.strip())
                 for fragment in fragments:
@@ -2116,6 +2137,7 @@ def _admintools_license_command_variants(
                 f'{base_cli} -t list_license',
                 f'{base_cli} license --list',
                 f'{base_cli} license --action list',
+                f'{base_cli} license --action=list',
                 f'{base_cli} license list',
             )
         )
@@ -2138,7 +2160,15 @@ def _admintools_license_command_variants(
                 for fragment in fragments
             )
             commands.extend(
+                f'{base_cli} license --{subcommand}={fragment}'
+                for fragment in fragments
+            )
+            commands.extend(
                 f'{base_cli} license --action {subcommand} {fragment}'
+                for fragment in fragments
+            )
+            commands.extend(
+                f'{base_cli} license --action={subcommand} {fragment}'
                 for fragment in fragments
             )
             commands.extend(
