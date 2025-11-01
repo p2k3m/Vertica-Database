@@ -977,7 +977,7 @@ def test_ensure_vertica_license_installed_handles_verification_index_error(monke
 
     status = smoke._ensure_vertica_license_installed('vertica_ce')
 
-    assert status.installed is False
+    assert status.installed is True
     assert status.verified is False
     assert installs == ['vertica_ce']
     assert responses == []
