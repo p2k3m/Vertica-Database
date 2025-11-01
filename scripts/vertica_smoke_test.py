@@ -2375,18 +2375,6 @@ def _admintools_license_command_variants(
                 )
             )
         )
-        option_flags = tuple(f'--{keyword}' for keyword in install_subcommands)
-
-        for flag in option_flags:
-            commands.extend(
-                f'{base_cli} -t license {flag} {fragment}'
-                for fragment in fragments
-            )
-            commands.extend(
-                f'{base_cli} license {flag} {fragment}'
-                for fragment in fragments
-            )
-
         for subcommand in install_subcommands:
             commands.extend(
                 f'{base_cli} license {subcommand} {fragment}'
