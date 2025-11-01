@@ -568,16 +568,27 @@ def test_install_vertica_license_deploys_fallback_when_admintools_missing(monkey
         ),
     )
 
-    called: list[tuple[str, str]] = []
+    called: list[tuple[str, str, tuple[str, ...]]] = []
 
-    def fake_deploy(container: str, source: str) -> bool:
-        called.append((container, source))
+    def fake_deploy(
+        container: str,
+        source: str,
+        *,
+        extra_destinations: tuple[str, ...] = (),
+    ) -> bool:
+        called.append((container, source, extra_destinations))
         return True
 
     monkeypatch.setattr(smoke, '_deploy_vertica_license_fallback', fake_deploy)
 
     assert smoke._install_vertica_license('vertica_ce') is True
-    assert called == [('vertica_ce', paths[0])]
+    assert called == [
+        (
+            'vertica_ce',
+            paths[0],
+            tuple(paths),
+        )
+    ]
 
 
 def test_install_vertica_license_fallback_failure(monkeypatch):
@@ -623,16 +634,27 @@ def test_install_vertica_license_handles_no_such_option(monkeypatch):
         ),
     )
 
-    called: list[tuple[str, str]] = []
+    called: list[tuple[str, str, tuple[str, ...]]] = []
 
-    def fake_deploy(container: str, source: str) -> bool:
-        called.append((container, source))
+    def fake_deploy(
+        container: str,
+        source: str,
+        *,
+        extra_destinations: tuple[str, ...] = (),
+    ) -> bool:
+        called.append((container, source, extra_destinations))
         return True
 
     monkeypatch.setattr(smoke, '_deploy_vertica_license_fallback', fake_deploy)
 
     assert smoke._install_vertica_license('vertica_ce') is True
-    assert called == [('vertica_ce', '/opt/vertica/config/license.dat')]
+    assert called == [
+        (
+            'vertica_ce',
+            '/opt/vertica/config/license.dat',
+            ('/opt/vertica/config/license.dat',),
+        )
+    ]
 
 
 def test_install_vertica_license_handles_index_error(monkeypatch):
@@ -655,16 +677,27 @@ def test_install_vertica_license_handles_index_error(monkeypatch):
         ),
     )
 
-    called: list[tuple[str, str]] = []
+    called: list[tuple[str, str, tuple[str, ...]]] = []
 
-    def fake_deploy(container: str, source: str) -> bool:
-        called.append((container, source))
+    def fake_deploy(
+        container: str,
+        source: str,
+        *,
+        extra_destinations: tuple[str, ...] = (),
+    ) -> bool:
+        called.append((container, source, extra_destinations))
         return True
 
     monkeypatch.setattr(smoke, '_deploy_vertica_license_fallback', fake_deploy)
 
     assert smoke._install_vertica_license('vertica_ce') is True
-    assert called == [('vertica_ce', '/opt/vertica/config/license.dat')]
+    assert called == [
+        (
+            'vertica_ce',
+            '/opt/vertica/config/license.dat',
+            ('/opt/vertica/config/license.dat',),
+        )
+    ]
 
 
 def test_deploy_vertica_license_fallback_handles_same_file(monkeypatch):
@@ -781,6 +814,30 @@ def test_discover_license_prioritises_known_paths(monkeypatch):
         '/opt/vertica/share/license/Vertica_CE.license.key',
     }
     assert candidates[-1] == '/opt/vertica/oss/python3/lib/python3.11/LICENSE.txt'
+
+
+def test_discover_license_includes_hex_named_paths(monkeypatch):
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        assert container == 'vertica_ce'
+        return SimpleNamespace(
+            returncode=0,
+            stdout='/opt/vertica/config/d5415f948449e9d4c421b568f2411140.dat\n',
+            stderr='',
+        )
+
+    def fake_which(tool: str) -> Optional[str]:
+        return '/usr/bin/docker' if tool == 'docker' else None
+
+    def fake_run(args, capture_output, text):
+        return SimpleNamespace(returncode=1, stdout='', stderr='')
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+    monkeypatch.setattr(smoke.shutil, 'which', fake_which)
+    monkeypatch.setattr(smoke.subprocess, 'run', fake_run)
+
+    candidates = smoke._discover_container_license_files('vertica_ce')
+
+    assert '/opt/vertica/config/d5415f948449e9d4c421b568f2411140.dat' in candidates
 
 
 def test_discover_license_prefers_data_config_paths(monkeypatch):

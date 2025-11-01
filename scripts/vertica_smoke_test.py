@@ -3443,6 +3443,19 @@ for dir in $search_roots; do
   fi
 done
 
+for dir in /opt/vertica/config /data/vertica/config; do
+  if [ -d "$dir" ]; then
+    for candidate in "$dir"/*.dat "$dir"/*.key; do
+      if [ -f "$candidate" ]; then
+        base=$(basename "$candidate")
+        if printf '%s\n' "$base" | grep -Eq '^[0-9a-fA-F]{32}\\.(dat|key)$'; then
+          printf '%s\n' "$candidate"
+        fi
+      fi
+    done
+  fi
+done
+
 for pattern in /opt/vertica/*.lic /opt/vertica/*.dat /opt/vertica/*.key \
                /opt/vertica/config/*.lic /opt/vertica/config/*.dat /opt/vertica/config/*.key \
                /opt/vertica/config/share/license/* /opt/vertica/share/license/*; do
@@ -3522,7 +3535,11 @@ def _install_vertica_license(container: str) -> bool:
         combined = f"{result.stdout}\n{result.stderr}".lower()
 
         if any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
-            if _deploy_vertica_license_fallback(container, path):
+            if _deploy_vertica_license_fallback(
+                container,
+                path,
+                extra_destinations=tuple(license_paths),
+            ):
                 log(
                     'admintools does not support the legacy install_license tool; '
                     'deployed license via fallback locations'
