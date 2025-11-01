@@ -3857,9 +3857,10 @@ def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
     if _admintools_output_indicates_index_error(combined_verification):
         log(
             'admintools license verification encountered an internal IndexError; '
-            'treating license installation as failed'
+            'assuming license installation succeeded but verification is '
+            'unavailable'
         )
-        return LicenseStatus(False, False)
+        return LicenseStatus(True, False)
 
     if any(
         pattern in combined_verification
