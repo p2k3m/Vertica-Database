@@ -19,20 +19,20 @@ smoke = importlib.import_module('scripts.vertica_smoke_test')
 
 def _command_contains_license_option(command: str, license_path: str) -> bool:
     normalized = command.replace('\n', ' ')
-    fragments = (
-        f'-l {license_path}',
-        f'-l={license_path}',
-        f'-L {license_path}',
-        f'-L={license_path}',
-        f'-k {license_path}',
-        f'-k={license_path}',
-        f'-K {license_path}',
-        f'-K={license_path}',
-    )
-    if any(fragment in normalized for fragment in fragments):
+    quoted = shlex.quote(license_path)
+
+    path_tokens = (license_path, quoted)
+    short_flags = ('-l', '-L', '-k', '-K', '-f')
+    long_flags = ('--license', '--file')
+
+    for token in path_tokens:
+        for flag in (*short_flags, *long_flags):
+            if f'{flag} {token}' in normalized or f'{flag}={token}' in normalized:
+                return True
+
+    if quoted in normalized.split():
         return True
 
-    quoted = shlex.quote(license_path)
     export_prefixes = (
         'export VERTICA_DB_LICENSE=',
         'export VERTICA_DB_LICENSE_FILE=',
