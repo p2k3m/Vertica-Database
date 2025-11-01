@@ -270,8 +270,11 @@ def _license_option_variants(
     # before the unknown-command retry limit was exceeded.
     variants: list[str] = [
         f'--file {quoted}',
+        f'--file={quoted}',
         f'--license {quoted}',
+        f'--license={quoted}',
         f'-f {quoted}',
+        f'-f={quoted}',
         quoted,
     ]
 
