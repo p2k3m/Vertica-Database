@@ -515,13 +515,29 @@ def test_run_admintools_license_command_limits_unknown_attempts(monkeypatch):
 def test_admintools_license_command_variants_include_subcommands():
     list_variants = smoke._admintools_license_command_variants('list')
     assert any('-t license list' in command for command in list_variants)
+    assert any('--action=list' in command for command in list_variants)
     install_variants = smoke._admintools_license_command_variants(
         'install',
         license_path='/data/vertica/config/license.key',
     )
     assert any('-t license install' in command for command in install_variants)
     assert any('license --set' in command for command in install_variants)
+    assert any('license --set=' in command for command in install_variants)
     assert any('license register' in command for command in install_variants)
+    assert any('license --action=install' in command for command in install_variants)
+
+
+def test_license_option_variants_include_extended_flags():
+    variants = smoke._license_option_variants('/data/vertica/config/license.key')
+    assert '--license-path /data/vertica/config/license.key' in variants
+    assert '--license-file=/data/vertica/config/license.key' in variants
+    assert '--licensekey /data/vertica/config/license.key' in variants
+    assert '--key=/data/vertica/config/license.key' in variants
+    assert '--path /data/vertica/config/license.key' in variants
+    create_variants = smoke._license_option_variants(
+        '/data/vertica/config/license.key', include_create_short_flag=True
+    )
+    assert '-l /data/vertica/config/license.key' in create_variants
 
 
 def test_install_vertica_license_uses_fallback(monkeypatch):
