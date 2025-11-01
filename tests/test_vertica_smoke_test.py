@@ -901,6 +901,49 @@ def test_attempt_creation_prefers_license_candidate(monkeypatch):
     )
 
 
+def test_attempt_creation_retries_when_license_required(monkeypatch):
+    commands: list[str] = []
+
+    def fake_fetch_env(container: str) -> dict[str, str]:
+        assert container == 'vertica_ce'
+        return {'VERTICA_DB_PASSWORD': 'secret'}
+
+    def fake_discover(container: str) -> list[str]:
+        return ['/opt/vertica/config/license.key']
+
+    def fake_ensure(container: str) -> smoke.LicenseStatus:
+        return smoke.LicenseStatus(False, False)
+
+    responses = [
+        SimpleNamespace(
+            returncode=1,
+            stdout='',
+            stderr=(
+                'Error: a database license has not been installed.\n'
+                'You must supply a valid license using the -l (--license) option.\n'
+            ),
+        ),
+        SimpleNamespace(returncode=0, stdout='Created', stderr=''),
+    ]
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        commands.append(command[-1])
+        return responses.pop(0)
+
+    monkeypatch.setattr(smoke, '_fetch_container_env', fake_fetch_env)
+    monkeypatch.setattr(smoke, '_discover_container_license_files', fake_discover)
+    monkeypatch.setattr(smoke, '_ensure_vertica_license_installed', fake_ensure)
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is True
+    assert len(commands) == 2
+    first = commands[0].splitlines()[-1]
+    second = commands[1].splitlines()[-1]
+    assert first.startswith('/opt/vertica/bin/admintools -t create_db')
+    assert second.startswith('/opt/vertica/bin/admintools -t create_db')
+    assert _command_contains_license_option(second, '/opt/vertica/config/license.key')
+
+
 def test_attempt_creation_retries_after_invalid_license_status(monkeypatch):
     monkeypatch.setattr(smoke, '_fetch_container_env', lambda container: {})
     monkeypatch.setattr(

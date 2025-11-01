@@ -235,6 +235,12 @@ _ADMINTOOLS_LICENSE_UNKNOWN_ATTEMPT_LIMIT = 32
 
 _ADMINTOOLS_LICENSE_TARGET_CACHE: dict[str, tuple[float, tuple[str, ...]]] = {}
 _ADMINTOOLS_LICENSE_TARGET_CACHE_TTL_SECONDS = 300.0
+
+_ADMINTOOLS_LICENSE_REQUIRED_PATTERNS: tuple[str, ...] = (
+    'license has not been installed',
+    'must supply a valid license',
+    'no license',
+)
 _ADMINTOOLS_HELP_LICENSE_PATTERN = re.compile(
     r'(?<!\S)([A-Za-z0-9_-]*license[A-Za-z0-9_-]*)',
     re.IGNORECASE,
@@ -3830,6 +3836,15 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                 and any(
                     pattern in combined_attempt
                     for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
+                )
+            ):
+                continue
+
+            if (
+                license_path is not None
+                and any(
+                    pattern in combined_attempt
+                    for pattern in _ADMINTOOLS_LICENSE_REQUIRED_PATTERNS
                 )
             ):
                 continue
