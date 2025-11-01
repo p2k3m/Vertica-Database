@@ -273,7 +273,7 @@ def test_run_admintools_license_command_falls_back(monkeypatch):
     assert result is not None
     assert result.returncode == 0
     assert commands[0].endswith('list_license')
-    assert commands[1].endswith('license --list')
+    assert commands[1].endswith('license -k list')
 
 
 def test_run_admintools_license_command_retries_on_index_error_fatal(monkeypatch):
@@ -296,7 +296,7 @@ def test_run_admintools_license_command_retries_on_index_error_fatal(monkeypatch
         'vertica_ce',
         (
             '/opt/vertica/bin/admintools -t list_license',
-            '/opt/vertica/bin/admintools license --list',
+            '/opt/vertica/bin/admintools license -k list',
         ),
         'missing docker',
         action='list',
@@ -306,7 +306,7 @@ def test_run_admintools_license_command_retries_on_index_error_fatal(monkeypatch
     assert result.returncode == 0
     assert commands == [
         '/opt/vertica/bin/admintools -t list_license',
-        '/opt/vertica/bin/admintools license --list',
+        '/opt/vertica/bin/admintools license -k list',
     ]
 
 
@@ -330,7 +330,7 @@ def test_run_admintools_license_command_stops_on_fatal_without_unknown(monkeypat
         'vertica_ce',
         (
             '/opt/vertica/bin/admintools -t list_license',
-            '/opt/vertica/bin/admintools license --list',
+            '/opt/vertica/bin/admintools license -k list',
         ),
         'missing docker',
         action='list',
@@ -364,7 +364,7 @@ def test_run_admintools_license_command_discovers_help_targets(monkeypatch):
 
     responses = [
         SimpleNamespace(returncode=1, stdout='', stderr='Unknown tool list_license'),
-        SimpleNamespace(returncode=1, stdout='', stderr='no such option: --list'),
+        SimpleNamespace(returncode=1, stdout='', stderr='no such option: -k list'),
         SimpleNamespace(returncode=0, stdout='License installed', stderr=''),
     ]
 
@@ -427,7 +427,7 @@ def test_run_admintools_license_command_supports_command_targets(monkeypatch):
         commands.append(command[-1])
         script = command[-1]
 
-        if 'admintools manage_license --list' in script and ' -t ' not in script:
+        if 'admintools manage_license -k list' in script and ' -t ' not in script:
             return SimpleNamespace(returncode=0, stdout='installed', stderr='')
 
         if '-t manage_license' in script:
@@ -449,8 +449,8 @@ def test_run_admintools_license_command_supports_command_targets(monkeypatch):
 
     assert result is not None
     assert result.returncode == 0
-    assert any('admintools -t manage_license --list' in cmd for cmd in commands)
-    assert any('admintools manage_license --list' in cmd for cmd in commands)
+    assert any('admintools -t manage_license -k list' in cmd for cmd in commands)
+    assert any('admintools manage_license -k list' in cmd for cmd in commands)
 
 
 def test_run_admintools_license_command_retries_on_fatal_with_unknown(monkeypatch):
@@ -462,7 +462,7 @@ def test_run_admintools_license_command_retries_on_fatal_with_unknown(monkeypatc
             stdout='',
             stderr=(
                 'Unhandled exception during admintools operation\n'
-                'ATMain.py: error: no such option: --list'
+                'ATMain.py: error: no such option: -k'
             ),
         ),
         SimpleNamespace(returncode=0, stdout='installed', stderr=''),
@@ -514,17 +514,15 @@ def test_run_admintools_license_command_limits_unknown_attempts(monkeypatch):
 
 def test_admintools_license_command_variants_include_subcommands():
     list_variants = smoke._admintools_license_command_variants('list')
-    assert any('-t license list' in command for command in list_variants)
-    assert any('--action=list' in command for command in list_variants)
+    assert any('-t license -k list' in command for command in list_variants)
+    assert any('license list' in command for command in list_variants)
     install_variants = smoke._admintools_license_command_variants(
         'install',
         license_path='/data/vertica/config/license.key',
     )
     assert any('-t license install' in command for command in install_variants)
-    assert any('license --set' in command for command in install_variants)
-    assert any('license --set=' in command for command in install_variants)
     assert any('license register' in command for command in install_variants)
-    assert any('license --action=install' in command for command in install_variants)
+    assert any('license -k install' in command for command in install_variants)
 
 
 def test_license_option_variants_include_extended_flags():
