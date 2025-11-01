@@ -3849,10 +3849,10 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         fragments = _license_option_variants(
             license_path, include_create_short_flag=True
         )
-        commands = [base_command]
-        commands.extend(
-            f'{base_command} {fragment}'.strip() for fragment in fragments
-        )
+        commands = [
+            f'{base_command} {fragment}'.strip()
+            for fragment in fragments
+        ]
         return tuple(dict.fromkeys(commands))
 
     def _run_create(
