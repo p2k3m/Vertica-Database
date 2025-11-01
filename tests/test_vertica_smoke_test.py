@@ -514,6 +514,7 @@ def test_admintools_license_command_variants_include_subcommands():
     list_variants = smoke._admintools_license_command_variants('list')
     assert any('-t license -k list' in command for command in list_variants)
     assert any('license list' in command for command in list_variants)
+    assert any('license_keys -k list' in command for command in list_variants)
     install_variants = smoke._admintools_license_command_variants(
         'install',
         license_path='/data/vertica/config/license.key',
@@ -522,6 +523,7 @@ def test_admintools_license_command_variants_include_subcommands():
     assert any('license register' in command for command in install_variants)
     assert any('license -k install' in command for command in install_variants)
     assert any('--install --file' in command for command in install_variants)
+    assert any('license_keys' in command for command in install_variants)
 
 
 def test_license_option_variants_include_extended_flags():
