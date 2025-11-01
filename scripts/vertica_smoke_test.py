@@ -2227,7 +2227,7 @@ def _run_admintools_license_command(
                 pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
             )
 
-            if fatal and not unknown:
+            if fatal:
                 return result
 
             if not unknown:
