@@ -2247,13 +2247,10 @@ def _run_admintools_license_command(
             unknown = any(
                 pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
             )
-            recoverable_unknown = any(
-                pattern in combined
-                for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_RECOVERABLE_PATTERNS
-            )
 
-            if fatal and unknown and not recoverable_unknown:
-                return result
+            if fatal:
+                if not unknown or 'list index out of range' in combined:
+                    return result
 
             if unknown:
                 unknown_tool_encountered = True
