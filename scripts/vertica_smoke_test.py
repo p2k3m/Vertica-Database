@@ -2,6 +2,7 @@ import ast
 import configparser
 import errno
 import grp
+import itertools
 import json
 import os
 import platform
@@ -252,6 +253,22 @@ _ADMINTOOLS_FATAL_LICENSE_PATTERNS: tuple[str, ...] = (
 )
 
 _ADMINTOOLS_LICENSE_INDEX_ERROR_PATTERN = 'list index out of range'
+_DATABASE_CATALOG_ENV_KEYS: tuple[str, ...] = (
+    'VERTICA_DB_CATALOG_PATH',
+    'VERTICA_DB_CATALOG_DIR',
+    'VERTICA_DB_CATALOG',
+    'VERTICA_CATALOG_PATH',
+    'VERTICA_CATALOG_DIR',
+    'VERTICA_CATALOG',
+)
+_DATABASE_DATA_ENV_KEYS: tuple[str, ...] = (
+    'VERTICA_DB_DATA_PATH',
+    'VERTICA_DB_DATA_DIR',
+    'VERTICA_DB_DATA',
+    'VERTICA_DATA_PATH',
+    'VERTICA_DATA_DIR',
+    'VERTICA_DATA',
+)
 
 _ADMINTOOLS_LICENSE_UNKNOWN_ATTEMPT_LIMIT = 32
 
@@ -373,6 +390,145 @@ def _license_environment_exports(license_path: str) -> tuple[str, ...]:
     )
 
     return tuple(f"export {variable}={quoted}" for variable in variables)
+
+
+def _normalize_container_path(path: str) -> Optional[str]:
+    """Normalize ``path`` for use inside the Vertica container."""
+
+    if not path:
+        return None
+    normalized = re.sub(r'/+', '/', path.strip())
+    if not normalized:
+        return None
+    if normalized != '/' and normalized.endswith('/'):
+        normalized = normalized[:-1]
+    return normalized
+
+
+def _sanitize_database_component(name: str) -> str:
+    """Return a filesystem-safe component derived from ``name``."""
+
+    sanitized = re.sub(r'[^A-Za-z0-9_.-]', '_', name)
+    return sanitized or 'database'
+
+
+def _ensure_path_suffix(path: str, component: str) -> str:
+    """Append ``component`` to ``path`` when it is not already present."""
+
+    if not component:
+        return path
+    normalized = path.rstrip('/')
+    if not normalized:
+        return component
+    last_segment = normalized.rsplit('/', 1)[-1]
+    if last_segment == component:
+        return normalized
+    return f'{normalized}/{component}'
+
+
+def _database_create_path_candidates(
+    env: dict[str, str], database: str
+) -> tuple[tuple[str, str], ...]:
+    """Return possible ``(catalog_path, data_path)`` pairs for ``database``."""
+
+    safe_db = _sanitize_database_component(database)
+    catalog_values = [
+        _normalize_container_path(env.get(key, ''))
+        for key in _DATABASE_CATALOG_ENV_KEYS
+    ]
+    data_values = [
+        _normalize_container_path(env.get(key, ''))
+        for key in _DATABASE_DATA_ENV_KEYS
+    ]
+
+    catalog_candidates: list[str] = []
+    data_candidates: list[str] = []
+
+    def _extend_candidates(values: list[Optional[str]], suffix: str) -> list[str]:
+        expanded: list[str] = []
+        for value in values:
+            if not value:
+                continue
+            expanded.append(value)
+            expanded.append(_ensure_path_suffix(value, safe_db))
+            expanded.append(_ensure_path_suffix(value, suffix))
+            expanded.append(
+                _ensure_path_suffix(_ensure_path_suffix(value, suffix), safe_db)
+            )
+            expanded.append(
+                _ensure_path_suffix(_ensure_path_suffix(value, safe_db), suffix)
+            )
+        return expanded
+
+    catalog_candidates.extend(_extend_candidates(catalog_values, 'catalog'))
+    data_candidates.extend(_extend_candidates(data_values, 'data'))
+
+    static_catalog_bases = (
+        '/data/vertica/catalog',
+        '/data/vertica',
+        '/home/dbadmin/catalog',
+        '/home/dbadmin',
+    )
+    static_data_bases = (
+        '/data/vertica/data',
+        '/data/vertica',
+        '/home/dbadmin/data',
+        '/home/dbadmin',
+    )
+
+    for base in static_catalog_bases:
+        catalog_candidates.extend(
+            _extend_candidates([_normalize_container_path(base)], 'catalog')
+        )
+    for base in static_data_bases:
+        data_candidates.extend(
+            _extend_candidates([_normalize_container_path(base)], 'data')
+        )
+
+    def _unique(values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        unique: list[str] = []
+        for value in values:
+            if not value:
+                continue
+            if value not in seen:
+                unique.append(value)
+                seen.add(value)
+        return unique
+
+    catalog_candidates = _unique(catalog_candidates)
+    data_candidates = _unique(data_candidates)
+
+    pairs: list[tuple[str, str]] = []
+
+    def _add_pair(catalog: Optional[str], data: Optional[str]) -> None:
+        if not catalog or not data:
+            return
+        pair = (catalog, data)
+        if pair not in pairs:
+            pairs.append(pair)
+
+    for catalog, data in itertools.product(catalog_candidates, data_candidates):
+        _add_pair(catalog, data)
+
+    if not pairs:
+        for catalog, data in (
+            ('/data/vertica/catalog', '/data/vertica/data'),
+            (
+                f'/data/vertica/catalog/{safe_db}',
+                f'/data/vertica/data/{safe_db}',
+            ),
+            (
+                f'/home/dbadmin/{safe_db}/catalog',
+                f'/home/dbadmin/{safe_db}/data',
+            ),
+        ):
+            normalized_catalog = _normalize_container_path(catalog)
+            normalized_data = _normalize_container_path(data)
+            if normalized_catalog and normalized_data:
+                _add_pair(normalized_catalog, normalized_data)
+
+    return tuple(pairs)
 
 
 def _parse_admintools_help_for_license_targets(output: str) -> tuple[str, ...]:
@@ -3978,6 +4134,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
     license_candidates = _discover_container_license_files(container)
     license_status = _ensure_vertica_license_installed(container)
     license_verified = license_status.verified
+    path_pairs = _database_create_path_candidates(env, database)
 
     if not license_status.installed:
         log(
@@ -3996,34 +4153,67 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         f"{shlex.quote(host)} -d {shlex.quote(database)} -p {shlex.quote(password)}"
     )
 
+    logged_path_pairs: set[tuple[str, str]] = set()
+
     def _create_command_variants(
         license_path: Optional[str],
-    ) -> tuple[str, ...]:
-        if not license_path:
-            return (base_command,)
+    ) -> list[tuple[Optional[tuple[str, str]], str]]:
+        commands_with_paths: list[tuple[Optional[tuple[str, str]], str]] = []
+        seen_commands: set[str] = set()
+        path_variants: tuple[Optional[tuple[str, str]], ...] = (*path_pairs, None)
 
-        fragments = _license_option_variants(
-            license_path, include_create_short_flag=True
-        )
-        commands = [
-            f'{base_command} {fragment}'.strip()
-            for fragment in fragments
-        ]
-        return tuple(dict.fromkeys(commands))
+        for path_pair in path_variants:
+            path_command = base_command
+            if path_pair is not None:
+                catalog_path, data_path = path_pair
+                path_command = (
+                    f"{path_command} -c {shlex.quote(catalog_path)} "
+                    f"-D {shlex.quote(data_path)}"
+                )
+
+            fragments: tuple[str, ...]
+            if license_path:
+                fragments = _license_option_variants(
+                    license_path, include_create_short_flag=True
+                )
+                candidate_commands = (
+                    f'{path_command} {fragment}'.strip()
+                    for fragment in fragments
+                )
+            else:
+                candidate_commands = (path_command,)
+
+            for command in candidate_commands:
+                if command in seen_commands:
+                    continue
+                seen_commands.add(command)
+                commands_with_paths.append((path_pair, command))
+
+        return commands_with_paths
 
     def _run_create(
         license_path: Optional[str] = None,
         *,
         use_license_flag: bool,
     ) -> Optional[subprocess.CompletedProcess[str]]:
+        nonlocal logged_path_pairs
+
         command_variants = (
             _create_command_variants(license_path)
             if use_license_flag and license_path
-            else (base_command,)
+            else _create_command_variants(None)
         )
         last_result: Optional[subprocess.CompletedProcess[str]] = None
 
-        for command in command_variants:
+        for path_pair, command in command_variants:
+            if path_pair is not None and path_pair not in logged_path_pairs:
+                catalog_path, data_path = path_pair
+                log(
+                    'Attempting Vertica database creation using '
+                    f'catalog path {catalog_path!r} and data path {data_path!r}'
+                )
+                logged_path_pairs.add(path_pair)
+
             script_lines = ['set -euo pipefail']
             if license_path:
                 script_lines.extend(_license_environment_exports(license_path))
