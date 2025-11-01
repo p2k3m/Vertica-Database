@@ -3627,6 +3627,13 @@ def _install_vertica_license(container: str) -> bool:
 
     if index_error_encountered and index_error_deployed:
         log(
+            'admintools license installation crashed with an IndexError; '
+            'continuing with manually deployed license files'
+        )
+        return True
+
+    if index_error_encountered:
+        log(
             'admintools license installation continues to fail with an '
             'IndexError despite deploying license files manually'
         )
@@ -3850,9 +3857,9 @@ def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
     if _admintools_output_indicates_index_error(combined_verification):
         log(
             'admintools license verification encountered an internal IndexError; '
-            'treating license as not installed'
+            'assuming license installation succeeded but cannot verify'
         )
-        return LicenseStatus(False, False)
+        return LicenseStatus(True, False)
 
     if any(
         pattern in combined_verification

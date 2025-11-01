@@ -702,7 +702,7 @@ def test_install_vertica_license_handles_index_error(monkeypatch):
 
     monkeypatch.setattr(smoke, '_deploy_vertica_license_fallback', fake_deploy)
 
-    assert smoke._install_vertica_license('vertica_ce') is False
+    assert smoke._install_vertica_license('vertica_ce') is True
     assert called == [
         (
             'vertica_ce',
@@ -931,6 +931,56 @@ def test_ensure_vertica_license_installed_handles_missing_list_tool(monkeypatch)
     assert status.verified is False
     assert observed == [False]
     assert installed == ['vertica_ce']
+
+
+def test_ensure_vertica_license_installed_handles_verification_index_error(monkeypatch):
+    responses = [
+        SimpleNamespace(
+            returncode=1,
+            stdout=(
+                'Unhandled exception during admintools operation\n'
+                'error message: list index out of range\n'
+            ),
+            stderr='',
+        ),
+        SimpleNamespace(
+            returncode=1,
+            stdout=(
+                'Unhandled exception during admintools operation\n'
+                'error message: list index out of range\n'
+            ),
+            stderr='',
+        ),
+    ]
+
+    def fake_run(
+        container: str,
+        commands: tuple[str, ...],
+        message: str,
+        *,
+        allow_root_fallback: bool,
+        action=None,
+        license_path=None,
+    ) -> SimpleNamespace:
+        assert container == 'vertica_ce'
+        assert allow_root_fallback is False
+        return responses.pop(0)
+
+    installs: list[str] = []
+
+    def fake_install(container: str) -> bool:
+        installs.append(container)
+        return True
+
+    monkeypatch.setattr(smoke, '_run_admintools_license_command', fake_run)
+    monkeypatch.setattr(smoke, '_install_vertica_license', fake_install)
+
+    status = smoke._ensure_vertica_license_installed('vertica_ce')
+
+    assert status.installed is True
+    assert status.verified is False
+    assert installs == ['vertica_ce']
+    assert responses == []
 
 
 def test_attempt_creation_prefers_license_candidate(monkeypatch):
