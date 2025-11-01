@@ -2153,6 +2153,9 @@ def _admintools_license_command_variants(
         'manage_license',
         'license_manager',
         'license-manager',
+        'license_keys',
+        'license-keys',
+        'licensekeys',
     )
 
     commands: list[str] = []
