@@ -224,7 +224,6 @@ _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'not recognised',
     'no such option',
     'no such command',
-    'list index out of range',
 )
 
 _ADMINTOOLS_UNKNOWN_LICENSE_RECOVERABLE_PATTERNS: tuple[str, ...] = (
@@ -251,6 +250,8 @@ _ADMINTOOLS_UNKNOWN_LICENSE_RECOVERABLE_PATTERNS: tuple[str, ...] = (
 _ADMINTOOLS_FATAL_LICENSE_PATTERNS: tuple[str, ...] = (
     'unhandled exception during admintools operation',
 )
+
+_ADMINTOOLS_LICENSE_INDEX_ERROR_PATTERN = 'list index out of range'
 
 _ADMINTOOLS_LICENSE_UNKNOWN_ATTEMPT_LIMIT = 32
 
@@ -340,6 +341,12 @@ class LicenseStatus(NamedTuple):
 
     installed: bool
     verified: bool
+
+
+def _admintools_output_indicates_index_error(output: str) -> bool:
+    """Return ``True`` when ``output`` includes the admintools IndexError."""
+
+    return _ADMINTOOLS_LICENSE_INDEX_ERROR_PATTERN in output.lower()
 
 
 def _license_environment_exports(license_path: str) -> tuple[str, ...]:
@@ -2249,7 +2256,7 @@ def _run_admintools_license_command(
             )
 
             if fatal:
-                if not unknown or 'list index out of range' in combined:
+                if not unknown or _admintools_output_indicates_index_error(combined):
                     return result
 
             if unknown:
@@ -3549,6 +3556,9 @@ def _install_vertica_license(container: str) -> bool:
         log('Unable to locate Vertica license files inside the container')
         return False
 
+    index_error_encountered = False
+    index_error_deployed = False
+
     for path in license_paths:
         log(f'Attempting to install Vertica license from {path}')
         result = _run_admintools_license_command(
@@ -3564,6 +3574,31 @@ def _install_vertica_license(container: str) -> bool:
             return False
 
         combined = f"{result.stdout}\n{result.stderr}".lower()
+        index_error = _admintools_output_indicates_index_error(combined)
+
+        if index_error:
+            index_error_encountered = True
+            log(
+                'admintools encountered an internal IndexError while attempting '
+                'to install the Vertica license; falling back to manual '
+                'deployment'
+            )
+            if _deploy_vertica_license_fallback(
+                container,
+                path,
+                extra_destinations=tuple(license_paths),
+            ):
+                index_error_deployed = True
+                log(
+                    'admintools license installation crashed; deployed license '
+                    'via fallback locations'
+                )
+            else:
+                log(
+                    'admintools license installation crashed and manual '
+                    'fallback deployment failed'
+                )
+            continue
 
         if any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
             if _deploy_vertica_license_fallback(
@@ -3589,6 +3624,12 @@ def _install_vertica_license(container: str) -> bool:
         if 'already installed' in combined or 'already licensed' in combined:
             log('Vertica license already installed according to admintools output')
             return True
+
+    if index_error_encountered and index_error_deployed:
+        log(
+            'admintools license installation continues to fail with an '
+            'IndexError despite deploying license files manually'
+        )
 
     log('Failed to install Vertica license using discovered files')
     return False
@@ -3743,9 +3784,16 @@ def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
         return LicenseStatus(False, False)
 
     combined = f"{status.stdout}\n{status.stderr}".lower()
+    index_error = _admintools_output_indicates_index_error(combined)
     status_unknown = any(
         pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
     )
+
+    if index_error:
+        log(
+            'admintools license status command failed with an internal IndexError; '
+            'treating license as not installed'
+        )
 
     if status_unknown:
         log(
@@ -3798,6 +3846,13 @@ def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
         return LicenseStatus(True, True)
 
     combined_verification = f"{verification.stdout}\n{verification.stderr}".lower()
+
+    if _admintools_output_indicates_index_error(combined_verification):
+        log(
+            'admintools license verification encountered an internal IndexError; '
+            'treating license as not installed'
+        )
+        return LicenseStatus(False, False)
 
     if any(
         pattern in combined_verification

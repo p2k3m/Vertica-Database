@@ -702,7 +702,7 @@ def test_install_vertica_license_handles_index_error(monkeypatch):
 
     monkeypatch.setattr(smoke, '_deploy_vertica_license_fallback', fake_deploy)
 
-    assert smoke._install_vertica_license('vertica_ce') is True
+    assert smoke._install_vertica_license('vertica_ce') is False
     assert called == [
         (
             'vertica_ce',
