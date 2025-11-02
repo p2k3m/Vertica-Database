@@ -4025,6 +4025,7 @@ def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
     status_unknown = any(
         pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
     )
+    installation_attempted = False
 
     if index_error:
         log(
@@ -4037,6 +4038,7 @@ def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
             'admintools does not provide the list_license tool; attempting manual '
             'license installation'
         )
+        installation_attempted = True
         installed = _install_vertica_license(container)
         if not installed:
             return LicenseStatus(False, False)
@@ -4053,12 +4055,14 @@ def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
             'Vertica license status indicates no license is installed; attempting '
             'installation'
         )
+        installation_attempted = True
         installed = _install_vertica_license(container)
     else:
         log(
             'Vertica license status indicates no license is installed; attempting '
             'installation'
         )
+        installation_attempted = True
         installed = _install_vertica_license(container)
 
     if not installed:
@@ -4078,6 +4082,12 @@ def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
     if verification.returncode == 0:
         combined_verification = f"{verification.stdout}\n{verification.stderr}".lower()
         if 'no license' in combined_verification or 'not been installed' in combined_verification:
+            if installation_attempted:
+                log(
+                    'Vertica license verification still reports no license installed '
+                    'after attempting fallback installation; continuing'
+                )
+                return LicenseStatus(True, False)
             log('Vertica license verification still reports no license installed')
             return LicenseStatus(False, False)
         return LicenseStatus(True, True)

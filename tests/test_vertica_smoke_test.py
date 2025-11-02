@@ -1013,6 +1013,42 @@ def test_ensure_vertica_license_installed_handles_verification_index_error(monke
     assert responses == []
 
 
+def test_ensure_vertica_license_installed_tolerates_verification_no_license(monkeypatch):
+    responses = [
+        SimpleNamespace(returncode=1, stdout='No license has been installed', stderr=''),
+        SimpleNamespace(returncode=0, stdout='No license has been installed', stderr=''),
+    ]
+
+    def fake_run(
+        container: str,
+        commands: tuple[str, ...],
+        message: str,
+        *,
+        allow_root_fallback: bool,
+        action=None,
+        license_path=None,
+    ) -> SimpleNamespace:
+        assert container == 'vertica_ce'
+        assert allow_root_fallback is False
+        return responses.pop(0)
+
+    installs: list[str] = []
+
+    def fake_install(container: str) -> bool:
+        installs.append(container)
+        return True
+
+    monkeypatch.setattr(smoke, '_run_admintools_license_command', fake_run)
+    monkeypatch.setattr(smoke, '_install_vertica_license', fake_install)
+
+    status = smoke._ensure_vertica_license_installed('vertica_ce')
+
+    assert status.installed is True
+    assert status.verified is False
+    assert installs == ['vertica_ce']
+    assert responses == []
+
+
 def test_attempt_creation_prefers_license_candidate(monkeypatch):
     commands: list[str] = []
 
