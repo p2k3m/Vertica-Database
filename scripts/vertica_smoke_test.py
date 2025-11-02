@@ -775,6 +775,31 @@ def _license_candidate_sort_key(path: str) -> tuple[int, int, str]:
     # Within each bucket prefer shorter paths to stabilise ordering while still
     # considering the raw path as a final tiebreaker.
     return (priority, extension_priority, len(path), lower)
+
+
+_LIKELY_LICENSE_EXTENSIONS: tuple[str, ...] = (
+    '.key',
+    '.dat',
+    '.license',
+    '.lic',
+)
+
+
+def _is_probable_license_destination(path: str) -> bool:
+    """Return ``True`` when ``path`` resembles a Vertica license location."""
+
+    lower = path.lower()
+
+    if path in _KNOWN_LICENSE_PATH_CANDIDATES:
+        return True
+
+    if lower.startswith('/data/vertica/config/'):
+        return lower.endswith(_LIKELY_LICENSE_EXTENSIONS)
+
+    if '/share/license/' in lower or '/config/license' in lower:
+        return lower.endswith(_LIKELY_LICENSE_EXTENSIONS)
+
+    return lower.endswith(_LIKELY_LICENSE_EXTENSIONS)
 # Some Vertica container revisions no longer expose dedicated admintools license
 # sub-commands and instead expect callers to supply the bundled Community
 # Edition license file directly to ``create_db``.  Include a set of known
@@ -3895,9 +3920,11 @@ def _deploy_vertica_license_fallback(
     quoted_source = shlex.quote(source_path)
     deployed = False
 
-    destinations = list(
-        dict.fromkeys((*_VERTICA_LICENSE_FALLBACK_PATHS, *extra_destinations))
-    )
+    destinations: list[str] = []
+    for destination in dict.fromkeys((*_VERTICA_LICENSE_FALLBACK_PATHS, *extra_destinations)):
+        if destination != source_path and not _is_probable_license_destination(destination):
+            continue
+        destinations.append(destination)
 
     for destination in destinations:
         if destination == source_path:
@@ -4135,11 +4162,18 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
     path_pairs = _database_create_path_candidates(env, database)
 
     if not license_status.installed:
-        log(
-            'Skipping Vertica database creation because license installation '
-            'failed'
-        )
-        return False
+        if license_candidates:
+            log(
+                'Vertica license installation was unsuccessful according to '
+                'admintools; continuing with database creation using discovered '
+                'license files'
+            )
+        else:
+            log(
+                'Skipping Vertica database creation because license installation '
+                'failed'
+            )
+            return False
 
     log(
         'Invoking Vertica admintools to create database '
