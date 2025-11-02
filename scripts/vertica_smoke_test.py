@@ -318,7 +318,6 @@ def _license_option_variants(
     # but that prevented us from reaching the combinations that actually work
     # before the unknown-command retry limit was exceeded.
     variants: list[str] = [
-        quoted,
         f'-l {quoted}',
         f'-l={quoted}',
         f'-L {quoted}',

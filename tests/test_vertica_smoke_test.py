@@ -581,6 +581,16 @@ def test_license_option_variants_include_extended_flags():
     assert '-l /data/vertica/config/license.key' in create_variants
 
 
+def test_license_option_variants_require_flag_prefix():
+    variants = smoke._license_option_variants('/data/vertica/config/license.key')
+    assert all(variant.startswith('-') for variant in variants)
+
+    create_variants = smoke._license_option_variants(
+        '/data/vertica/config/license.key', include_create_short_flag=True
+    )
+    assert all(variant.startswith('-') for variant in create_variants)
+
+
 def test_install_vertica_license_uses_fallback(monkeypatch):
     commands: list[str] = []
 
