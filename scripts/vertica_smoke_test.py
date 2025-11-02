@@ -348,6 +348,9 @@ def _license_option_variants(
         f'--file={quoted}',
     ]
 
+    if not include_create_short_flag:
+        variants.append(quoted)
+
     if include_create_short_flag:
         variants.extend(
             [
