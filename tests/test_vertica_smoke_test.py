@@ -567,18 +567,19 @@ def test_admintools_license_target_commands_skip_subcommands_for_upgrade():
 
 def test_license_option_variants_include_extended_flags():
     variants = smoke._license_option_variants('/data/vertica/config/license.key')
-    assert '--license-path /data/vertica/config/license.key' in variants
-    assert '--license-file=/data/vertica/config/license.key' in variants
-    assert '--licensekey /data/vertica/config/license.key' in variants
-    assert '--key=/data/vertica/config/license.key' in variants
+    assert '--license /data/vertica/config/license.key' in variants
+    assert '--license-path=/data/vertica/config/license.key' in variants
+    assert '--license_file /data/vertica/config/license.key' in variants
+    assert '--license-key=/data/vertica/config/license.key' in variants
     assert '--key-file /data/vertica/config/license.key' in variants
-    assert '--license-key-file=/data/vertica/config/license.key' in variants
-    assert '-p /data/vertica/config/license.key' in variants
-    assert '--path /data/vertica/config/license.key' in variants
+    assert '--path=/data/vertica/config/license.key' in variants
+    assert '--file /data/vertica/config/license.key' in variants
+    assert '-l /data/vertica/config/license.key' not in variants
     create_variants = smoke._license_option_variants(
         '/data/vertica/config/license.key', include_create_short_flag=True
     )
     assert '-l /data/vertica/config/license.key' in create_variants
+    assert '-L=/data/vertica/config/license.key' in create_variants
 
 
 def test_license_option_variants_require_flag_prefix():

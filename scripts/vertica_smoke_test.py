@@ -313,35 +313,11 @@ def _license_option_variants(
 
     quoted = shlex.quote(license_path)
 
-    # Prioritise the flag spellings observed in modern Vertica releases.  The
-    # historic implementation attempted to brute-force every imaginable variant,
-    # but that prevented us from reaching the combinations that actually work
-    # before the unknown-command retry limit was exceeded.
+    # Focus on the long-form flag spellings recognised by modern Vertica
+    # releases.  Keeping this list compact ensures we reach the combinations that
+    # actually work before the unknown-command retry limit is exceeded when
+    # probing ``admintools``.
     variants: list[str] = [
-        f'-l {quoted}',
-        f'-l={quoted}',
-        f'-L {quoted}',
-        f'-L={quoted}',
-        f'-k {quoted}',
-        f'-k={quoted}',
-        f'-K {quoted}',
-        f'-K={quoted}',
-        f'-p {quoted}',
-        f'-p={quoted}',
-        f'-P {quoted}',
-        f'-P={quoted}',
-        f'-f {quoted}',
-        f'-f={quoted}',
-        f'--path {quoted}',
-        f'--path={quoted}',
-        f'--file {quoted}',
-        f'--file={quoted}',
-        f'--key {quoted}',
-        f'--key={quoted}',
-        f'--key-file {quoted}',
-        f'--key-file={quoted}',
-        f'--keyfile {quoted}',
-        f'--keyfile={quoted}',
         f'--license {quoted}',
         f'--license={quoted}',
         f'--license-path {quoted}',
@@ -350,8 +326,8 @@ def _license_option_variants(
         f'--license_path={quoted}',
         f'--license-file {quoted}',
         f'--license-file={quoted}',
-        f'--licensefile {quoted}',
-        f'--licensefile={quoted}',
+        f'--license_file {quoted}',
+        f'--license_file={quoted}',
         f'--license-key {quoted}',
         f'--license-key={quoted}',
         f'--license_key {quoted}',
@@ -360,23 +336,25 @@ def _license_option_variants(
         f'--license-key-file={quoted}',
         f'--license_key_file {quoted}',
         f'--license_key_file={quoted}',
-        f'--licensekey {quoted}',
-        f'--licensekey={quoted}',
-        f'--licensekeyfile {quoted}',
-        f'--licensekeyfile={quoted}',
-        f'--license-keypath {quoted}',
-        f'--license-keypath={quoted}',
-        f'--license_keypath {quoted}',
-        f'--license_keypath={quoted}',
+        f'--key {quoted}',
+        f'--key={quoted}',
+        f'--key-file {quoted}',
+        f'--key-file={quoted}',
+        f'--keyfile {quoted}',
+        f'--keyfile={quoted}',
+        f'--path {quoted}',
+        f'--path={quoted}',
+        f'--file {quoted}',
+        f'--file={quoted}',
     ]
 
     if include_create_short_flag:
         variants.extend(
             [
-                f'-k {quoted}',
-                f'-k={quoted}',
-                f'-K {quoted}',
-                f'-K={quoted}',
+                f'-l {quoted}',
+                f'-l={quoted}',
+                f'-L {quoted}',
+                f'-L={quoted}',
             ]
         )
 
