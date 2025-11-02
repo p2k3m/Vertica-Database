@@ -2540,10 +2540,18 @@ def _run_admintools_license_command(
             )
             index_error = _admintools_output_indicates_index_error(combined)
 
-            if index_error and index_error_result is None:
-                index_error_result = result
+            if index_error:
+                if index_error_result is None:
+                    index_error_result = result
+                # Vertica releases that crash with an IndexError tend to do so
+                # for every invocation variant.  Continuing to hammer
+                # ``admintools`` after the first crash prolongs recovery and
+                # often leaves the container in a restart loop.  Stop probing
+                # additional commands and allow callers to fall back to manual
+                # license deployment instead.
+                return index_error_result
 
-            if fatal and not index_error and not unknown:
+            if fatal and not unknown:
                 return result
 
             if unknown:

@@ -297,14 +297,9 @@ def test_run_admintools_license_command_retries_after_index_error(monkeypatch):
 
     fatal_message = 'Unhandled exception during admintools operation\nlist index out of range'
 
-    responses = [
-        SimpleNamespace(returncode=1, stdout=fatal_message, stderr=''),
-        SimpleNamespace(returncode=1, stdout=fatal_message, stderr=''),
-    ]
-
     def fake_exec(container, command, message, allow_root_fallback=True):
         commands.append(command[-1])
-        return responses.pop(0)
+        return SimpleNamespace(returncode=1, stdout=fatal_message, stderr='')
 
     monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
 
@@ -322,7 +317,6 @@ def test_run_admintools_license_command_retries_after_index_error(monkeypatch):
     assert result.returncode == 1
     assert commands == [
         '/opt/vertica/bin/admintools -t list_license',
-        '/opt/vertica/bin/admintools license -k list',
     ]
     assert result.stdout == fatal_message
 
