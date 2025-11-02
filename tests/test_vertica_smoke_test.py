@@ -23,7 +23,23 @@ def _command_contains_license_option(command: str, license_path: str) -> bool:
 
     path_tokens = (license_path, quoted)
     short_flags = ('-l', '-L', '-k', '-K', '-f')
-    long_flags = ('--license', '--file')
+    long_flags = (
+        '--license',
+        '--file',
+        '--key',
+        '--key-file',
+        '--keyfile',
+        '--license-key',
+        '--license_key',
+        '--license-file',
+        '--licensefile',
+        '--license-path',
+        '--license_path',
+        '--license-key-file',
+        '--license_key_file',
+        '--licensekey',
+        '--licensekeyfile',
+    )
 
     for token in path_tokens:
         for flag in (*short_flags, *long_flags):
@@ -525,6 +541,8 @@ def test_admintools_license_command_variants_include_subcommands():
     )
     assert any('-t license install' in command for command in install_variants)
     assert any('license register' in command for command in install_variants)
+    assert any('register_license' in command for command in install_variants)
+    assert any('install_license ' in command or command.endswith('install_license') for command in install_variants)
     assert any('license -k install' in command for command in install_variants)
     assert any('license install --file' in command for command in install_variants)
     assert any('license_keys' in command for command in install_variants)
@@ -559,6 +577,9 @@ def test_license_option_variants_include_extended_flags():
     assert '--license-file=/data/vertica/config/license.key' in variants
     assert '--licensekey /data/vertica/config/license.key' in variants
     assert '--key=/data/vertica/config/license.key' in variants
+    assert '--key-file /data/vertica/config/license.key' in variants
+    assert '--license-key-file=/data/vertica/config/license.key' in variants
+    assert '-p /data/vertica/config/license.key' in variants
     assert '--path /data/vertica/config/license.key' in variants
     create_variants = smoke._license_option_variants(
         '/data/vertica/config/license.key', include_create_short_flag=True
