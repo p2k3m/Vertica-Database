@@ -313,43 +313,13 @@ def _license_option_variants(
 
     quoted = shlex.quote(license_path)
 
-    # Focus on the long-form flag spellings recognised by modern Vertica
-    # releases.  Keeping this list compact ensures we reach the combinations that
-    # actually work before the unknown-command retry limit is exceeded when
-    # probing ``admintools``.
+    # Prefer the short-form options that older Vertica releases expose.  These
+    # continue to work on newer versions while avoiding the ``ATMain.py: error:
+    # no such option`` failures observed when probing with long-form flags on
+    # legacy builds.  Trying the compatible spellings first greatly reduces the
+    # likelihood of triggering the admintools IndexError that accompanies those
+    # option parsing failures.
     variants: list[str] = [
-        f'--license {quoted}',
-        f'--license={quoted}',
-        f'--license-path {quoted}',
-        f'--license-path={quoted}',
-        f'--license_path {quoted}',
-        f'--license_path={quoted}',
-        f'--license-file {quoted}',
-        f'--license-file={quoted}',
-        f'--license_file {quoted}',
-        f'--license_file={quoted}',
-        f'--license-key {quoted}',
-        f'--license-key={quoted}',
-        f'--license_key {quoted}',
-        f'--license_key={quoted}',
-        f'--license-key-file {quoted}',
-        f'--license-key-file={quoted}',
-        f'--license_key_file {quoted}',
-        f'--license_key_file={quoted}',
-        f'--key {quoted}',
-        f'--key={quoted}',
-        f'--key-file {quoted}',
-        f'--key-file={quoted}',
-        f'--keyfile {quoted}',
-        f'--keyfile={quoted}',
-        f'--path {quoted}',
-        f'--path={quoted}',
-        f'--file {quoted}',
-        f'--file={quoted}',
-        quoted,
-    ]
-
-    short_flag_variants: list[str] = [
         f'-f {quoted}',
         f'-f={quoted}',
         f'-F {quoted}',
@@ -358,19 +328,54 @@ def _license_option_variants(
         f'-k={quoted}',
         f'-K {quoted}',
         f'-K={quoted}',
+        quoted,
     ]
 
     if include_create_short_flag:
-        short_flag_variants.extend(
-            [
+        variants.extend(
+            (
                 f'-l {quoted}',
                 f'-l={quoted}',
                 f'-L {quoted}',
                 f'-L={quoted}',
-            ]
+            )
         )
 
-    variants.extend(short_flag_variants)
+    # Include the long-form spellings used by newer Vertica releases last so
+    # that the invocation succeeds before we reach them on environments that do
+    # not recognise these flags.
+    variants.extend(
+        [
+            f'--license {quoted}',
+            f'--license={quoted}',
+            f'--license-path {quoted}',
+            f'--license-path={quoted}',
+            f'--license_path {quoted}',
+            f'--license_path={quoted}',
+            f'--license-file {quoted}',
+            f'--license-file={quoted}',
+            f'--license_file {quoted}',
+            f'--license_file={quoted}',
+            f'--license-key {quoted}',
+            f'--license-key={quoted}',
+            f'--license_key {quoted}',
+            f'--license_key={quoted}',
+            f'--license-key-file {quoted}',
+            f'--license-key-file={quoted}',
+            f'--license_key_file {quoted}',
+            f'--license_key_file={quoted}',
+            f'--key {quoted}',
+            f'--key={quoted}',
+            f'--key-file {quoted}',
+            f'--key-file={quoted}',
+            f'--keyfile {quoted}',
+            f'--keyfile={quoted}',
+            f'--path {quoted}',
+            f'--path={quoted}',
+            f'--file {quoted}',
+            f'--file={quoted}',
+        ]
+    )
 
     # Preserve ordering while removing duplicates.
     return tuple(dict.fromkeys(variants))
