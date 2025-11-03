@@ -2330,6 +2330,7 @@ def _admintools_license_target_commands(
         fragments = _license_option_variants(license_path)
 
         option_flags = tuple(f'--{keyword}' for keyword in install_subcommands)
+        short_action_flags = ('-i',)
 
         for base in bases:
             for fragment in fragments:
@@ -2338,6 +2339,10 @@ def _admintools_license_target_commands(
             for flag in option_flags:
                 for fragment in fragments:
                     commands.append(f'{base} {flag} {fragment}'.strip())
+
+            for short_flag in short_action_flags:
+                for fragment in fragments:
+                    commands.append(f'{base} {short_flag} {fragment}'.strip())
 
             if supports_subcommands:
                 for subcommand in install_subcommands:
