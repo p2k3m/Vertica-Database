@@ -1154,6 +1154,32 @@ def test_attempt_creation_prefers_license_candidate(monkeypatch):
     )
 
 
+def test_attempt_creation_disables_root_fallback(monkeypatch):
+    observed: list[bool] = []
+
+    def fake_fetch_env(container: str) -> dict[str, str]:
+        assert container == 'vertica_ce'
+        return {'VERTICA_DB_PASSWORD': 'secret'}
+
+    monkeypatch.setattr(smoke, '_fetch_container_env', fake_fetch_env)
+    monkeypatch.setattr(smoke, '_discover_container_license_files', lambda container: [])
+    monkeypatch.setattr(
+        smoke,
+        '_ensure_vertica_license_installed',
+        lambda container: smoke.LicenseStatus(True, True),
+    )
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        observed.append(allow_root_fallback)
+        return SimpleNamespace(returncode=0, stdout='Created', stderr='')
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is True
+    assert observed
+    assert all(value is False for value in observed)
+
+
 def test_attempt_creation_retries_when_license_required(monkeypatch):
     commands: list[str] = []
 

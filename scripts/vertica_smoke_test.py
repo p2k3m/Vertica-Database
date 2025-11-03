@@ -4349,6 +4349,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                 container,
                 ['sh', '-c', script],
                 'Docker CLI is not available while creating Vertica database',
+                allow_root_fallback=False,
             )
 
             if result is None:
