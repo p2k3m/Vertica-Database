@@ -253,6 +253,7 @@ _ADMINTOOLS_FATAL_LICENSE_PATTERNS: tuple[str, ...] = (
 )
 
 _ADMINTOOLS_LICENSE_INDEX_ERROR_PATTERN = 'list index out of range'
+_ADMINTOOLS_LICENSE_INDEX_ERROR_UNKNOWN_RETRY_LIMIT = 24
 _DATABASE_CATALOG_ENV_KEYS: tuple[str, ...] = (
     'VERTICA_DB_CATALOG_PATH',
     'VERTICA_DB_CATALOG_DIR',
@@ -2505,6 +2506,40 @@ def _run_admintools_license_command(
     unknown_attempts = 0
     extra_targets_added = False
     help_commands_added = False
+    index_error_unknown_attempts = 0
+    unsupported_flags: set[str] = set()
+
+    flag_pattern = re.compile(
+        r"(?:no\s+such|unknown|unrecognized|unrecognised|invalid|unexpected|"
+        r"not\s+recogniz(?:ed|es)|not\s+recognis(?:ed|es))\s+"
+        r"(?:option|argument|arguments)\s*(?:[:=]\s*|\s+)[\"']?"
+        r"(-{1,2}[A-Za-z0-9][A-Za-z0-9_-]*)",
+        re.IGNORECASE,
+    )
+
+    def _command_uses_unsupported_flag(command: str) -> bool:
+        if not unsupported_flags:
+            return False
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            return False
+        for token in tokens:
+            if not token.startswith('-') or token == '-':
+                continue
+            flag = token.split('=', 1)[0]
+            if flag in unsupported_flags:
+                return True
+        return False
+
+    def _record_unsupported_flags(output: str) -> None:
+        for match in flag_pattern.findall(output):
+            unsupported_flags.add(match)
+            if len(match) == 2 and match.startswith('-') and match[1].isalpha():
+                unsupported_flags.add('-' + match[1].lower())
+                unsupported_flags.add('-' + match[1].upper())
+            if match.startswith('--'):
+                unsupported_flags.add(match.lower())
 
     index = 0
 
@@ -2514,6 +2549,8 @@ def _run_admintools_license_command(
             index += 1
 
             if command in attempted:
+                continue
+            if _command_uses_unsupported_flag(command):
                 continue
             attempted.add(command)
 
@@ -2532,7 +2569,8 @@ def _run_admintools_license_command(
             if result.returncode == 0:
                 return result
 
-            combined = f"{result.stdout}\n{result.stderr}".lower()
+            raw_output = f"{result.stdout}\n{result.stderr}"
+            combined = raw_output.lower()
             fatal = any(
                 pattern in combined for pattern in _ADMINTOOLS_FATAL_LICENSE_PATTERNS
             )
@@ -2544,6 +2582,15 @@ def _run_admintools_license_command(
             if index_error:
                 if index_error_result is None:
                     index_error_result = result
+                if unknown:
+                    _record_unsupported_flags(raw_output)
+                    index_error_unknown_attempts += 1
+                    if (
+                        index_error_unknown_attempts
+                        >= _ADMINTOOLS_LICENSE_INDEX_ERROR_UNKNOWN_RETRY_LIMIT
+                    ):
+                        return index_error_result
+                    continue
                 # Vertica releases that crash with an IndexError tend to do so
                 # for every invocation variant.  Continuing to hammer
                 # ``admintools`` after the first crash prolongs recovery and
@@ -2558,6 +2605,7 @@ def _run_admintools_license_command(
             if unknown:
                 unknown_tool_encountered = True
                 unknown_attempts += 1
+                _record_unsupported_flags(raw_output)
 
                 if (
                     action is not None
