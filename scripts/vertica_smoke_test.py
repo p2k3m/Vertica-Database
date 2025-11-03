@@ -346,13 +346,22 @@ def _license_option_variants(
         f'--path={quoted}',
         f'--file {quoted}',
         f'--file={quoted}',
+        quoted,
     ]
 
-    if not include_create_short_flag:
-        variants.append(quoted)
+    short_flag_variants: list[str] = [
+        f'-f {quoted}',
+        f'-f={quoted}',
+        f'-F {quoted}',
+        f'-F={quoted}',
+        f'-k {quoted}',
+        f'-k={quoted}',
+        f'-K {quoted}',
+        f'-K={quoted}',
+    ]
 
     if include_create_short_flag:
-        variants.extend(
+        short_flag_variants.extend(
             [
                 f'-l {quoted}',
                 f'-l={quoted}',
@@ -360,6 +369,8 @@ def _license_option_variants(
                 f'-L={quoted}',
             ]
         )
+
+    variants.extend(short_flag_variants)
 
     # Preserve ordering while removing duplicates.
     return tuple(dict.fromkeys(variants))
