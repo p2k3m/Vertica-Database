@@ -2520,6 +2520,14 @@ def _run_admintools_license_command(
     def _command_uses_unsupported_flag(command: str) -> bool:
         if not unsupported_flags:
             return False
+        # Listing license metadata does not rely on a provided license file and
+        # callers expect us to try every discovered variant, even if a previous
+        # attempt suggested a particular flag was unsupported.  Continue to
+        # probe all variants in that scenario so we can fall back to alternative
+        # admintools targets that may still honour the flag while providing the
+        # necessary information.
+        if license_path is None:
+            return False
         try:
             tokens = shlex.split(command)
         except ValueError:
