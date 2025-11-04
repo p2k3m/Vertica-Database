@@ -320,17 +320,7 @@ def _license_option_variants(
     # legacy builds.  Trying the compatible spellings first greatly reduces the
     # likelihood of triggering the admintools IndexError that accompanies those
     # option parsing failures.
-    variants: list[str] = [
-        f'-f {quoted}',
-        f'-f={quoted}',
-        f'-F {quoted}',
-        f'-F={quoted}',
-        f'-k {quoted}',
-        f'-k={quoted}',
-        f'-K {quoted}',
-        f'-K={quoted}',
-        quoted,
-    ]
+    variants: list[str] = []
 
     if include_create_short_flag:
         variants.extend(
@@ -341,6 +331,21 @@ def _license_option_variants(
                 f'-L={quoted}',
             )
         )
+
+    variants.extend(
+        [
+            f'-f {quoted}',
+            f'-f={quoted}',
+            f'-F {quoted}',
+            f'-F={quoted}',
+            f'-k {quoted}',
+            f'-k={quoted}',
+            f'-K {quoted}',
+            f'-K={quoted}',
+        ]
+    )
+
+    variants.append(quoted)
 
     # Include the long-form spellings used by newer Vertica releases last so
     # that the invocation succeeds before we reach them on environments that do
