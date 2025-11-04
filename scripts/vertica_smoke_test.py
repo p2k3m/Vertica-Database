@@ -345,11 +345,15 @@ def _license_option_variants(
         ]
     )
 
-    variants.append(quoted)
-
-    # Include the long-form spellings used by newer Vertica releases last so
-    # that the invocation succeeds before we reach them on environments that do
-    # not recognise these flags.
+    # Include the long-form spellings used by newer Vertica releases before the
+    # plain path variant.  Recent container images reject the historic short
+    # flags with a usage error that also triggers the admintools ``IndexError``
+    # crash.  When that happens the invocation previously bailed out before
+    # reaching the long-form options, leaving the smoke test stuck without a
+    # valid license.  Trying the long-form flags earlier allows the automation
+    # to fall forward to a supported spelling before ``admintools`` aborts the
+    # probe, while still keeping the bare path fallback available for legacy
+    # environments that require it.
     variants.extend(
         [
             f'--license {quoted}',
@@ -382,6 +386,8 @@ def _license_option_variants(
             f'--file={quoted}',
         ]
     )
+
+    variants.append(quoted)
 
     # Preserve ordering while removing duplicates.
     return tuple(dict.fromkeys(variants))
