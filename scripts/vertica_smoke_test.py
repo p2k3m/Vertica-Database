@@ -804,6 +804,25 @@ _LIKELY_LICENSE_EXTENSIONS: tuple[str, ...] = (
 )
 
 
+def _is_probable_license_source(path: str) -> bool:
+    """Return ``True`` when ``path`` appears to contain Vertica license data."""
+
+    lower = path.lower()
+
+    if '/help_files/' in lower:
+        return False
+
+    if lower.endswith('.txt'):
+        if '/license/' in lower:
+            return True
+        return False
+
+    if '/site-packages/' in lower and '/license/' not in lower:
+        return False
+
+    return True
+
+
 def _is_probable_license_destination(path: str) -> bool:
     """Return ``True`` when ``path`` resembles a Vertica license location."""
 
@@ -3882,6 +3901,8 @@ done
     for line in result.stdout.splitlines():
         normalized = line.strip()
         if not normalized or normalized in seen:
+            continue
+        if not _is_probable_license_source(normalized):
             continue
         seen.add(normalized)
         candidates.append(normalized)
