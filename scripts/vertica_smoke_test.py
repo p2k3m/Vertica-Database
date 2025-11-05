@@ -393,6 +393,19 @@ def _license_option_variants(
     return tuple(dict.fromkeys(variants))
 
 
+def _wrap_license_command_with_environment(
+    command: str, license_path: str
+) -> str:
+    """Prefix ``command`` with exports that expose ``license_path`` to admintools."""
+
+    exports = _license_environment_exports(license_path)
+    if not exports:
+        return command
+
+    export_script = "\n".join(exports)
+    return f"{export_script}\n{command}"
+
+
 class LicenseStatus(NamedTuple):
     """Represents the outcome of a Vertica license installation attempt."""
 
@@ -2390,6 +2403,16 @@ def _admintools_license_target_commands(
                             f'{base} -k {subcommand} {fragment}'.strip()
                         )
 
+            env_commands = [base]
+            if supports_subcommands:
+                for subcommand in install_subcommands:
+                    env_commands.append(f'{base} {subcommand}'.strip())
+                    env_commands.append(f'{base} -k {subcommand}'.strip())
+            commands.extend(
+                _wrap_license_command_with_environment(command, license_path)
+                for command in env_commands
+            )
+
         return tuple(dict.fromkeys(commands))
 
     raise ValueError(f'Unsupported admintools license action: {action}')
@@ -2482,6 +2505,30 @@ def _admintools_license_command_variants(
                 f'{base_cli} license -k {subcommand} {fragment}'
                 for fragment in fragments
             )
+
+        env_commands: list[str] = []
+        for subcommand in install_subcommands:
+            env_commands.extend(
+                (
+                    f'{base_cli} license {subcommand}',
+                    f'{base_cli} -t license -k {subcommand}',
+                    f'{base_cli} license -k {subcommand}',
+                )
+            )
+        env_commands.extend(
+            (
+                f'{base_cli} -t license',
+                f'{base_cli} license',
+                f'{base_cli} -t install_license',
+                f'{base_cli} install_license',
+                f'{base_cli} -t upgrade_license_key',
+                f'{base_cli} upgrade_license_key',
+            )
+        )
+        commands.extend(
+            _wrap_license_command_with_environment(command, license_path)
+            for command in env_commands
+        )
 
         commands.extend(
             f'{base_cli} -t install_license {fragment}' for fragment in fragments
