@@ -1369,6 +1369,91 @@ def test_attempt_creation_retries_after_invalid_license_status(monkeypatch):
     )
 
 
+def test_attempt_creation_rediscovers_license_after_seeding(monkeypatch):
+    def fake_fetch_env(container: str) -> dict[str, str]:
+        assert container == 'vertica_ce'
+        return {'VERTICA_DB_PASSWORD': 'secret'}
+
+    discovery_sequences = [
+        ['/opt/vertica/config/d5415f948449e9d4c421b568f2411140.dat'],
+        ['/data/vertica/config/license.key'],
+    ]
+    discovery_calls = {'count': 0}
+
+    def fake_discover(container: str) -> list[str]:
+        assert container == 'vertica_ce'
+        index = discovery_calls['count']
+        discovery_calls['count'] += 1
+        if index < len(discovery_sequences):
+            return discovery_sequences[index]
+        return discovery_sequences[-1]
+
+    statuses = iter(
+        [
+            smoke.LicenseStatus(True, False),
+            smoke.LicenseStatus(True, True),
+        ]
+    )
+
+    def fake_ensure(container: str) -> smoke.LicenseStatus:
+        assert container == 'vertica_ce'
+        try:
+            return next(statuses)
+        except StopIteration:
+            return smoke.LicenseStatus(True, True)
+
+    deploy_calls: list[tuple[str, str, tuple[str, ...]]] = []
+
+    def fake_deploy(
+        container: str,
+        source_path: str,
+        *,
+        extra_destinations: tuple[str, ...] = (),
+    ) -> bool:
+        assert container == 'vertica_ce'
+        deploy_calls.append((container, source_path, extra_destinations))
+        return True
+
+    responses = [
+        SimpleNamespace(
+            returncode=1,
+            stdout='',
+            stderr=(
+                'Error: License key '
+                '/opt/vertica/config/d5415f948449e9d4c421b568f2411140.dat '
+                'not installed.\nInvalid license status\n'
+            ),
+        ),
+        SimpleNamespace(returncode=1, stdout='', stderr='Error: license not installed\n'),
+        SimpleNamespace(returncode=1, stdout='', stderr='Error: still missing license\n'),
+        SimpleNamespace(returncode=0, stdout='Created', stderr=''),
+    ]
+
+    commands: list[str] = []
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        assert container == 'vertica_ce'
+        assert allow_root_fallback is False
+        script = command[-1]
+        commands.append(script)
+        return responses.pop(0)
+
+    monkeypatch.setattr(smoke, '_fetch_container_env', fake_fetch_env)
+    monkeypatch.setattr(smoke, '_discover_container_license_files', fake_discover)
+    monkeypatch.setattr(smoke, '_ensure_vertica_license_installed', fake_ensure)
+    monkeypatch.setattr(smoke, '_deploy_vertica_license_fallback', fake_deploy)
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is True
+
+    assert discovery_calls['count'] >= 2
+    assert deploy_calls
+    assert any(
+        _command_contains_license_option(cmd, '/data/vertica/config/license.key')
+        for cmd in commands
+    )
+
+
 def test_attempt_creation_continues_when_license_installation_failed(monkeypatch):
     monkeypatch.setattr(smoke, '_fetch_container_env', lambda container: {})
     monkeypatch.setattr(

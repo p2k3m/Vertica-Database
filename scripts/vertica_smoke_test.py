@@ -4337,8 +4337,8 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         or '127.0.0.1'
     )
 
-    license_candidates = _discover_container_license_files(container)
     license_status = _ensure_vertica_license_installed(container)
+    license_candidates = _discover_container_license_files(container)
     license_verified = license_status.verified
     path_pairs = _database_create_path_candidates(env, database)
 
@@ -4561,6 +4561,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                         )
                         return True
             if seeded:
+                license_candidates = _discover_container_license_files(container)
                 log('Vertica license seeding did not resolve create_db failure; continuing')
 
         for path in license_candidates:
