@@ -310,7 +310,7 @@ _ADMINTOOLS_LICENSE_HELP_COMMAND_CACHE_TTL_SECONDS = 300.0
 
 
 def _license_option_variants(
-    license_path: str, *, include_create_short_flag: bool = False
+    license_path: str, *, include_short_flag: bool = False
 ) -> tuple[str, ...]:
     """Return possible Vertica admintools license flag variants for ``license_path``."""
 
@@ -324,7 +324,7 @@ def _license_option_variants(
     # option parsing failures.
     variants: list[str] = []
 
-    if include_create_short_flag:
+    if include_short_flag:
         variants.extend(
             (
                 f'-l {quoted}',
@@ -2378,7 +2378,7 @@ def _admintools_license_target_commands(
             )
         )
 
-        fragments = _license_option_variants(license_path)
+        fragments = _license_option_variants(license_path, include_short_flag=True)
 
         option_flags = tuple(f'--{keyword}' for keyword in install_subcommands)
         short_action_flags = ('-i',)
@@ -4389,7 +4389,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
             fragments: tuple[str, ...]
             if license_path:
                 fragments = _license_option_variants(
-                    license_path, include_create_short_flag=True
+                    license_path, include_short_flag=True
                 )
                 candidate_commands = (
                     f'{path_command} {fragment}'.strip()
