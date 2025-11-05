@@ -543,6 +543,26 @@ def test_admintools_license_command_variants_include_subcommands():
     assert any('upgrade_license_key' in command for command in install_variants)
 
 
+def test_admintools_license_command_variants_include_environment_exports():
+    variants = smoke._admintools_license_command_variants(
+        'install',
+        license_path='/data/vertica/config/license.key',
+    )
+
+    exported = [
+        command
+        for command in variants
+        if command.startswith('export VERTICA_DB_LICENSE=/data/vertica/config/license.key')
+    ]
+
+    assert exported
+    assert any('admintools license register' in command for command in exported)
+    assert all(
+        _command_contains_license_option(command, '/data/vertica/config/license.key')
+        for command in exported
+    )
+
+
 def test_admintools_license_target_commands_skip_subcommands_for_audit():
     commands = smoke._admintools_license_target_commands(
         'license_audit',
@@ -563,6 +583,27 @@ def test_admintools_license_target_commands_skip_subcommands_for_upgrade():
     assert any('--license' in command for command in commands)
     assert any('--file' in command for command in commands)
     assert all('-k install' not in command for command in commands)
+
+
+def test_admintools_license_target_commands_include_environment_exports():
+    commands = smoke._admintools_license_target_commands(
+        'manage_license',
+        'install',
+        '/data/vertica/config/license.key',
+    )
+
+    exported = [
+        command
+        for command in commands
+        if command.startswith('export VERTICA_DB_LICENSE=/data/vertica/config/license.key')
+    ]
+
+    assert exported
+    assert any(command.rstrip().endswith('admintools manage_license') for command in exported)
+    assert all(
+        _command_contains_license_option(command, '/data/vertica/config/license.key')
+        for command in exported
+    )
 
 
 def test_license_option_variants_include_extended_flags():
