@@ -205,10 +205,12 @@ _EULA_PROMPT_LOG_TTL_SECONDS = 30.0
 # helpers (``list_license`` and ``install_license``) with a consolidated
 # ``license`` target that accepts sub-commands.  Continue to recognise the
 # historic output that indicated an unknown tool while also treating the newer
-# "unknown option" style failures as signals to try an alternate invocation.
+# "unknown option"/"no such option" style failures as signals to try an
+# alternate invocation.
 _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS: tuple[str, ...] = (
     'unknown tool',
     'unknown command',
+    'no such option',
     'unknown option',
     'unrecognized option',
     'unrecognised option',
