@@ -1367,6 +1367,69 @@ def test_attempt_creation_retries_when_license_flag_unrecognized_plural(monkeypa
     assert '-L ' not in final_line
 
 
+def test_attempt_creation_preserves_license_error_after_mixed_option_failures(monkeypatch):
+    logs: list[str] = []
+
+    def fake_log(message: str) -> None:
+        logs.append(message)
+
+    commands: list[str] = []
+
+    def fake_fetch_env(container: str) -> dict[str, str]:
+        assert container == 'vertica_ce'
+        return {'VERTICA_DB_PASSWORD': 'secret'}
+
+    def fake_discover(container: str) -> list[str]:
+        return ['/data/vertica/config/license.key']
+
+    def fake_ensure(container: str) -> smoke.LicenseStatus:
+        return smoke.LicenseStatus(True, False)
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        script = command[-1]
+        commands.append(script)
+        last_line = script.splitlines()[-1]
+        if ' -l ' in last_line:
+            return SimpleNamespace(
+                returncode=1,
+                stdout='',
+                stderr=(
+                    'Error: a database license has not been installed.\n'
+                    'You must supply a valid license using the -l (--license) option.\n'
+                ),
+            )
+        if '--license' in last_line or last_line.endswith('/data/vertica/config/license.key'):
+            return SimpleNamespace(
+                returncode=1,
+                stdout='',
+                stderr='Command line contains unknown options /data/vertica/config/license.key\n',
+            )
+        return SimpleNamespace(
+            returncode=1,
+            stdout='',
+            stderr=(
+                'Error: a database license has not been installed.\n'
+                'You must supply a valid license using the -l (--license) option.\n'
+            ),
+        )
+
+    monkeypatch.setattr(smoke, 'log', fake_log)
+    monkeypatch.setattr(smoke, '_fetch_container_env', fake_fetch_env)
+    monkeypatch.setattr(smoke, '_discover_container_license_files', fake_discover)
+    monkeypatch.setattr(smoke, '_ensure_vertica_license_installed', fake_ensure)
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is False
+
+    message = (
+        'admintools reported that the create_db command does not support '
+        'the supplied license flag; retrying without explicit flag while '
+        'preserving license environment variables'
+    )
+    assert message not in logs
+    assert any(' -l ' in script.splitlines()[-1] for script in commands)
+
+
 def test_attempt_creation_continues_without_installed_license(monkeypatch):
     commands: list[str] = []
 

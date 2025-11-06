@@ -4420,6 +4420,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
             else _create_command_variants(None)
         )
         last_result: Optional[subprocess.CompletedProcess[str]] = None
+        last_unknown_result: Optional[subprocess.CompletedProcess[str]] = None
 
         for path_pair, command in command_variants:
             if path_pair is not None and path_pair not in logged_path_pairs:
@@ -4445,8 +4446,6 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
             if result is None:
                 return None
 
-            last_result = result
-
             if result.returncode == 0:
                 return result
 
@@ -4459,7 +4458,10 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                     for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
                 )
             ):
+                last_unknown_result = result
                 continue
+
+            last_result = result
 
             if (
                 license_path is not None
@@ -4472,7 +4474,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
 
             return result
 
-        return last_result
+        return last_result or last_unknown_result
 
     initial_attempts: list[tuple[Optional[str], bool]] = []
 
