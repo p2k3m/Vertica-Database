@@ -327,33 +327,25 @@ def _license_option_variants(
     # in more than two dozen failures before the automation could fall forward
     # to a supported syntax.  That easily exceeded the retry budget inside
     # ``_run_admintools_license_command`` and prevented the smoke test from
-    # ever reaching the plain path fallback.  Restrict the option set to the
-    # known ``-l``/``--license*`` forms and avoid the ``--flag=VALUE`` style
-    # altogether so admintools receives clean positional arguments.
+    # ever reaching the plain path fallback.  Community Edition 24.2 tightened
+    # ``create_db`` validation even further and now rejects everything except
+    # ``-l`` and ``--license``.  Restrict the option set to those known values
+    # and avoid the ``--flag=VALUE`` style altogether so admintools receives
+    # clean positional arguments.
     variants: list[str] = []
 
     short_flag_variants = (
         f'-l {quoted}',
-        f'-L {quoted}',
+    )
+
+    long_flag_variants = (
+        f'--license {quoted}',
     )
 
     if include_short_flag:
         variants.extend(short_flag_variants)
 
-    variants.extend(
-        [
-            f'--license {quoted}',
-            f'--license-path {quoted}',
-            f'--license_path {quoted}',
-            f'--file {quoted}',
-            f'--license-file {quoted}',
-            f'--license_file {quoted}',
-            f'--license-key {quoted}',
-            f'--license_key {quoted}',
-            f'--license-key-file {quoted}',
-            f'--license_key_file {quoted}',
-        ]
-    )
+    variants.extend(long_flag_variants)
 
     if not include_short_flag:
         variants.extend(short_flag_variants)
