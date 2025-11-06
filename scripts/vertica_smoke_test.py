@@ -755,7 +755,15 @@ def _license_candidate_sort_key(path: str) -> tuple[int, int, str]:
     # Next, prioritise files that reside in Vertica's dedicated ``license``
     # directories to avoid unrelated third-party ``LICENSE`` documents that also
     # live under ``/opt/vertica`` (for example, Python package metadata).
-    elif '/share/license/' in lower or '/config/license' in lower:
+    elif any(
+        segment in lower
+        for segment in (
+            '/share/license/',
+            '/share/licens/',
+            '/config/license',
+            '/config/licens',
+        )
+    ):
         priority = 2
     # Explicit Vertica-specific filenames (``*.license``/``*.lic``/``*.dat``/``*.key``)
     # are stronger signals than generic text documents.
@@ -803,11 +811,19 @@ def _is_probable_license_source(path: str) -> bool:
         return False
 
     if lower.endswith('.txt'):
-        if '/license/' in lower:
+        if any(
+            segment in lower
+            for segment in (
+                '/license/',
+                '/licens/',
+            )
+        ):
             return True
         return False
 
-    if '/site-packages/' in lower and '/license/' not in lower:
+    if '/site-packages/' in lower and not any(
+        segment in lower for segment in ('/license/', '/licens/')
+    ):
         return False
 
     return True
@@ -824,7 +840,15 @@ def _is_probable_license_destination(path: str) -> bool:
     if lower.startswith('/data/vertica/config/'):
         return lower.endswith(_LIKELY_LICENSE_EXTENSIONS)
 
-    if '/share/license/' in lower or '/config/license' in lower:
+    if any(
+        segment in lower
+        for segment in (
+            '/share/license/',
+            '/share/licens/',
+            '/config/license',
+            '/config/licens',
+        )
+    ):
         return lower.endswith(_LIKELY_LICENSE_EXTENSIONS)
 
     return lower.endswith(_LIKELY_LICENSE_EXTENSIONS)
@@ -837,19 +861,31 @@ def _is_probable_license_destination(path: str) -> bool:
 _KNOWN_LICENSE_PATH_CANDIDATES: tuple[str, ...] = (
     '/data/vertica/config/license.dat',
     '/data/vertica/config/license.key',
+    '/data/vertica/config/licensing/license.dat',
+    '/data/vertica/config/licensing/license.key',
     '/opt/vertica/config/license.dat',
     '/opt/vertica/config/license.key',
+    '/opt/vertica/config/licensing/license.dat',
+    '/opt/vertica/config/licensing/license.key',
     '/opt/vertica/config/share/license.dat',
     '/opt/vertica/config/share/license.key',
     '/opt/vertica/config/share/license/license.dat',
     '/opt/vertica/config/share/license/license.key',
+    '/opt/vertica/config/share/licensing/license.dat',
+    '/opt/vertica/config/share/licensing/license.key',
     '/opt/vertica/config/share/license/VerticaCE_AWS.license.key',
     '/opt/vertica/config/share/license/Vertica_CE.license.key',
     '/opt/vertica/config/share/license/Vertica_Community_Edition.license.key',
+    '/opt/vertica/config/share/licensing/VerticaCE_AWS.license.key',
+    '/opt/vertica/config/share/licensing/Vertica_CE.license.key',
+    '/opt/vertica/config/share/licensing/Vertica_Community_Edition.license.key',
     '/opt/vertica/share/license.dat',
     '/opt/vertica/share/license.key',
     '/opt/vertica/share/license/vertica.license',
     '/opt/vertica/share/license/Vertica_CE.license.key',
+    '/opt/vertica/share/licensing/license.dat',
+    '/opt/vertica/share/licensing/license.key',
+    '/opt/vertica/share/licensing/Vertica_CE.license.key',
 )
 
 # Track when ``admintools.conf`` was first observed missing for each Vertica
@@ -3873,9 +3909,9 @@ search_roots="/opt/vertica /opt/vertica/config /opt/vertica/config/share /opt/ve
 for dir in $search_roots; do
   if [ -d "$dir" ]; then
     find "$dir" -maxdepth 8 -type f \
-      \( -iname '*license*.dat' -o -iname '*license*.lic' -o -iname '*license*.txt' \
-         -o -iname '*license*.key' -o -iname '*license*.xml' -o -iname '*license*.json' \
-         -o -iname '*license*.cfg' -o -iname '*license*.conf' \
+      \( -iname '*licens*.dat' -o -iname '*licens*.lic' -o -iname '*licens*.txt' \
+         -o -iname '*licens*.key' -o -iname '*licens*.xml' -o -iname '*licens*.json' \
+         -o -iname '*licens*.cfg' -o -iname '*licens*.conf' \
          -o -iname '*eula*.txt' -o -iname '*eula*.lic' -o -iname '*eula*.dat' \) \
       -print 2>/dev/null
   fi
@@ -3896,7 +3932,8 @@ done
 
 for pattern in /opt/vertica/*.lic /opt/vertica/*.dat /opt/vertica/*.key \
                /opt/vertica/config/*.lic /opt/vertica/config/*.dat /opt/vertica/config/*.key \
-               /opt/vertica/config/share/license/* /opt/vertica/share/license/*; do
+               /opt/vertica/config/share/license/* /opt/vertica/config/share/licens*/* \
+               /opt/vertica/share/license/* /opt/vertica/share/licens*/*; do
   for candidate in $pattern; do
     if [ -f "$candidate" ]; then
       printf '%s\n' "$candidate"
