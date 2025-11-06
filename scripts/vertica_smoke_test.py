@@ -4041,6 +4041,35 @@ def _install_vertica_license(container: str) -> bool:
                 )
             continue
 
+        if 'invalid license status' in combined or (
+            'license key' in combined and 'not installed' in combined
+        ):
+            log(
+                'admintools reported an invalid license status while installing; '
+                'deploying fallback Vertica license files'
+            )
+            error_paths = _extract_license_error_paths(
+                f"{result.stdout}\n{result.stderr}"
+            )
+            extra_destinations = tuple(
+                dict.fromkeys((*license_paths, *error_paths))
+            )
+            if _deploy_vertica_license_fallback(
+                container,
+                path,
+                extra_destinations=extra_destinations,
+            ):
+                log(
+                    'admintools license installation reported an invalid status; '
+                    'deployed fallback license files'
+                )
+                return True
+            log(
+                'admintools license installation reported an invalid status and '
+                'fallback deployment failed'
+            )
+            continue
+
         if any(pattern in combined for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS):
             if _deploy_vertica_license_fallback(
                 container,
