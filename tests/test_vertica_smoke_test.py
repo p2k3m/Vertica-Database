@@ -965,6 +965,24 @@ def test_discover_license_prioritises_known_paths(monkeypatch):
     assert '/opt/vertica/oss/python3/lib/python3.11/LICENSE.txt' not in candidates
 
 
+def test_discover_license_includes_licensing_directories(monkeypatch):
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        assert container == 'vertica_ce'
+        stdout = (
+            '/opt/vertica/config/share/licensing/Vertica_CE.license.key\n'
+            '/opt/vertica/share/licensing/license.key\n'
+        )
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr='')
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+    monkeypatch.setattr(smoke.shutil, 'which', lambda tool: None)
+
+    candidates = smoke._discover_container_license_files('vertica_ce')
+
+    assert '/opt/vertica/config/share/licensing/Vertica_CE.license.key' in candidates
+    assert '/opt/vertica/share/licensing/license.key' in candidates
+
+
 def test_discover_license_omits_python_help_files(monkeypatch):
     def fake_exec(container, command, message, allow_root_fallback=True):
         assert container == 'vertica_ce'
