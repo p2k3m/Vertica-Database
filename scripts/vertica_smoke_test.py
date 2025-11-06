@@ -387,6 +387,15 @@ def _admintools_output_indicates_index_error(output: str) -> bool:
     return _ADMINTOOLS_LICENSE_INDEX_ERROR_PATTERN in output.lower()
 
 
+def _admintools_output_indicates_license_missing(output: str) -> bool:
+    """Return ``True`` when ``admintools`` reports that no license is installed."""
+
+    lower = output.lower()
+    return 'license' in lower and any(
+        pattern in lower for pattern in _ADMINTOOLS_LICENSE_REQUIRED_PATTERNS
+    )
+
+
 def _license_environment_exports(license_path: str) -> tuple[str, ...]:
     """Return shell ``export`` statements for Vertica license environment vars."""
 
@@ -4383,6 +4392,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
     license_verified = license_status.verified
     path_pairs = _database_create_path_candidates(env, database)
     invalid_license_paths: set[str] = set()
+    last_license_attempt: Optional[str] = None
 
     if not license_status.installed:
         if license_candidates:
@@ -4532,6 +4542,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         if key in attempted:
             continue
         attempted.add(key)
+        last_license_attempt = license_path
         result = _run_create(license_path, use_license_flag=use_license_flag)
         if result is None:
             return False
@@ -4560,12 +4571,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
 
     raw_output = f"{result.stdout}\n{result.stderr}"
     combined = raw_output.lower()
-    license_error = 'license' in combined and (
-        'not been installed' in combined
-        or 'not installed' in combined
-        or 'no license' in combined
-        or 'invalid license status' in combined
-    )
+    license_error = _admintools_output_indicates_license_missing(combined)
 
     if license_error:
         log(
@@ -4575,6 +4581,13 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
         error_paths = _extract_license_error_paths(raw_output)
         if error_paths:
             invalid_license_paths.update(error_paths)
+        elif last_license_attempt is not None:
+            invalid_license_paths.add(last_license_attempt)
+            log(
+                'admintools did not report a specific license path while '
+                f'failing with a license error; marking {last_license_attempt} '
+                'as invalid'
+            )
         available_candidates = [
             path for path in license_candidates if path not in invalid_license_paths
         ]
@@ -4591,6 +4604,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                 ]
         if license_verified or _ensure_vertica_license_installed(container).installed:
             log('Retrying Vertica database creation after installing license')
+            last_license_attempt = None
             retry_result = _run_create(None, use_license_flag=False)
             if retry_result is not None and retry_result.returncode == 0:
                 log('Requested Vertica database creation inside container; waiting for recovery')
@@ -4613,6 +4627,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                         'Retrying Vertica database creation after seeding license '
                         'paths reported by admintools'
                     )
+                    last_license_attempt = None
                     retry_result = _run_create(None, use_license_flag=False)
                     if retry_result is not None and retry_result.returncode == 0:
                         log(
@@ -4633,12 +4648,20 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
 
         for path in available_candidates:
             log(f'Retrying Vertica database creation using license file {path}')
+            last_license_attempt = path
             retry_result = _run_create(path, use_license_flag=True)
             if retry_result is not None:
                 if retry_result.returncode == 0:
                     log('Requested Vertica database creation inside container; waiting for recovery')
                     return True
                 combined_retry = f"{retry_result.stdout}\n{retry_result.stderr}".lower()
+                if _admintools_output_indicates_license_missing(combined_retry):
+                    invalid_license_paths.add(path)
+                    log(
+                        'admintools continued to report a missing Vertica license '
+                        f'when using {path}; skipping this candidate'
+                    )
+                    continue
                 if any(
                     pattern in combined_retry
                     for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
@@ -4648,6 +4671,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                         'support the supplied license flag; retrying without explicit '
                         'flag while preserving license environment variables'
                     )
+                    last_license_attempt = path
                     env_retry = _run_create(path, use_license_flag=False)
                     if env_retry is None:
                         return False
@@ -4658,6 +4682,14 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                         )
                         return True
                     combined_env = f"{env_retry.stdout}\n{env_retry.stderr}".lower()
+                    if _admintools_output_indicates_license_missing(combined_env):
+                        invalid_license_paths.add(path)
+                        log(
+                            'admintools continued to report a missing Vertica '
+                            f'license when retrying without an explicit flag for {path}; '
+                            'skipping this candidate'
+                        )
+                        continue
                     if any(
                         pattern in combined_env
                         for pattern in _ADMINTOOLS_UNKNOWN_LICENSE_PATTERNS
