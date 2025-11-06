@@ -321,18 +321,21 @@ def _license_option_variants(
     # no such option`` failures observed when probing with long-form flags on
     # legacy builds.  Trying the compatible spellings first greatly reduces the
     # likelihood of triggering the admintools IndexError that accompanies those
-    # option parsing failures.
+    # option parsing failures.  The ``-l``/``-L`` spellings are recognised by
+    # newer releases, so include them even when ``include_short_flag`` is false
+    # (albeit after the legacy ``-f``/``-k`` variants) to ensure the installer
+    # eventually attempts the supported flag on modern images.
     variants: list[str] = []
 
+    short_flag_variants = (
+        f'-l {quoted}',
+        f'-l={quoted}',
+        f'-L {quoted}',
+        f'-L={quoted}',
+    )
+
     if include_short_flag:
-        variants.extend(
-            (
-                f'-l {quoted}',
-                f'-l={quoted}',
-                f'-L {quoted}',
-                f'-L={quoted}',
-            )
-        )
+        variants.extend(short_flag_variants)
 
     variants.extend(
         [
@@ -346,6 +349,9 @@ def _license_option_variants(
             f'-K={quoted}',
         ]
     )
+
+    if not include_short_flag:
+        variants.extend(short_flag_variants)
 
     # Include the long-form spellings used by newer Vertica releases before the
     # plain path variant.  Recent container images reject the historic short

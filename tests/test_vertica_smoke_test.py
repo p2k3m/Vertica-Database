@@ -621,7 +621,7 @@ def test_license_option_variants_include_extended_flags():
     assert '-F=/data/vertica/config/license.key' in variants
     assert '-k /data/vertica/config/license.key' in variants
     assert '-K=/data/vertica/config/license.key' in variants
-    assert '-l /data/vertica/config/license.key' not in variants
+    assert '-l /data/vertica/config/license.key' in variants
     create_variants = smoke._license_option_variants(
         '/data/vertica/config/license.key', include_short_flag=True
     )
