@@ -4439,7 +4439,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
 
     initial_attempts: list[tuple[Optional[str], bool]] = []
 
-    if not license_verified and license_candidates:
+    if license_candidates:
         first_candidate = license_candidates[0]
         initial_attempts.append((first_candidate, True))
         initial_attempts.append((first_candidate, False))
