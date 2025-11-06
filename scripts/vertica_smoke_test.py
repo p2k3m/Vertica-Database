@@ -4343,9 +4343,12 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
     )
 
     license_status = _ensure_vertica_license_installed(container)
-    license_candidates = _discover_container_license_files(container)
+    license_candidates = list(
+        dict.fromkeys(_discover_container_license_files(container))
+    )
     license_verified = license_status.verified
     path_pairs = _database_create_path_candidates(env, database)
+    invalid_license_paths: set[str] = set()
 
     if not license_status.installed:
         if license_candidates:
@@ -4536,6 +4539,22 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
             'the database; attempting to install the default license'
         )
         error_paths = _extract_license_error_paths(raw_output)
+        if error_paths:
+            invalid_license_paths.update(error_paths)
+        available_candidates = [
+            path for path in license_candidates if path not in invalid_license_paths
+        ]
+        if error_paths and not available_candidates:
+            refreshed_candidates = list(
+                dict.fromkeys(_discover_container_license_files(container))
+            )
+            if refreshed_candidates != license_candidates:
+                license_candidates = refreshed_candidates
+                available_candidates = [
+                    path
+                    for path in license_candidates
+                    if path not in invalid_license_paths
+                ]
         if license_verified or _ensure_vertica_license_installed(container).installed:
             log('Retrying Vertica database creation after installing license')
             retry_result = _run_create(None, use_license_flag=False)
@@ -4543,13 +4562,13 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                 log('Requested Vertica database creation inside container; waiting for recovery')
                 return True
 
-        if error_paths and license_candidates:
+        if error_paths and available_candidates:
             log(
                 'Attempting to seed Vertica license using paths reported in '
                 'admintools output'
             )
             seeded = False
-            for candidate in license_candidates:
+            for candidate in available_candidates:
                 if _deploy_vertica_license_fallback(
                     container,
                     candidate,
@@ -4568,10 +4587,17 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
                         )
                         return True
             if seeded:
-                license_candidates = _discover_container_license_files(container)
+                license_candidates = list(
+                    dict.fromkeys(_discover_container_license_files(container))
+                )
+                available_candidates = [
+                    path
+                    for path in license_candidates
+                    if path not in invalid_license_paths
+                ]
                 log('Vertica license seeding did not resolve create_db failure; continuing')
 
-        for path in license_candidates:
+        for path in available_candidates:
             log(f'Retrying Vertica database creation using license file {path}')
             retry_result = _run_create(path, use_license_flag=True)
             if retry_result is not None:
