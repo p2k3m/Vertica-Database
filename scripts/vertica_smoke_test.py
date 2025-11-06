@@ -344,16 +344,18 @@ def _license_option_variants(
 
     if include_short_flag:
         variants.extend(short_flag_variants)
-
-    variants.extend(long_flag_variants)
-
-    if not include_short_flag:
+        variants.extend(long_flag_variants)
+    else:
+        variants.extend(long_flag_variants)
         variants.extend(short_flag_variants)
 
-    # Try the plain path variant towards the end so older releases that expect a
-    # positional argument can still succeed once admintools finishes rejecting
-    # unsupported flags.
-    variants.append(quoted)
+        # Try the plain path variant towards the end so older releases that
+        # expect a positional argument can still succeed once admintools
+        # finishes rejecting unsupported flags.  Skip this when generating
+        # options for ``create_db`` because recent Vertica revisions treat a
+        # bare path as an unknown option, which breaks license installation
+        # during bootstrap.
+        variants.append(quoted)
 
     # Preserve ordering while removing duplicates.
     return tuple(dict.fromkeys(variants))
