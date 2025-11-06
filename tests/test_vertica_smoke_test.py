@@ -614,7 +614,9 @@ def test_license_option_variants_include_supported_flags():
     assert '-l /data/vertica/config/license.key' in variants
     assert '/data/vertica/config/license.key' in variants
     create_variants = smoke._license_option_variants(
-        '/data/vertica/config/license.key', include_short_flag=True
+        '/data/vertica/config/license.key',
+        include_short_flag=True,
+        allow_plain_path=False,
     )
     assert '-l /data/vertica/config/license.key' in create_variants
     assert '--license /data/vertica/config/license.key' in create_variants
@@ -639,7 +641,9 @@ def test_license_option_variants_only_include_plain_path_for_admintools():
     assert any(not variant.startswith('-') for variant in variants)
 
     create_variants = smoke._license_option_variants(
-        '/data/vertica/config/license.key', include_short_flag=True
+        '/data/vertica/config/license.key',
+        include_short_flag=True,
+        allow_plain_path=False,
     )
     assert all(variant.startswith('-') for variant in create_variants)
 

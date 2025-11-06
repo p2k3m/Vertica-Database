@@ -313,7 +313,10 @@ _ADMINTOOLS_LICENSE_HELP_COMMAND_CACHE_TTL_SECONDS = 300.0
 
 
 def _license_option_variants(
-    license_path: str, *, include_short_flag: bool = False
+    license_path: str,
+    *,
+    include_short_flag: bool = False,
+    allow_plain_path: bool = True,
 ) -> tuple[str, ...]:
     """Return possible Vertica admintools license flag variants for ``license_path``."""
 
@@ -334,13 +337,8 @@ def _license_option_variants(
     # clean positional arguments.
     variants: list[str] = []
 
-    short_flag_variants = (
-        f'-l {quoted}',
-    )
-
-    long_flag_variants = (
-        f'--license {quoted}',
-    )
+    short_flag_variants = (f'-l {quoted}',)
+    long_flag_variants = (f'--license {quoted}',)
 
     if include_short_flag:
         variants.extend(short_flag_variants)
@@ -349,12 +347,12 @@ def _license_option_variants(
         variants.extend(long_flag_variants)
         variants.extend(short_flag_variants)
 
+    if allow_plain_path:
         # Try the plain path variant towards the end so older releases that
         # expect a positional argument can still succeed once admintools
-        # finishes rejecting unsupported flags.  Skip this when generating
-        # options for ``create_db`` because recent Vertica revisions treat a
-        # bare path as an unknown option, which breaks license installation
-        # during bootstrap.
+        # finishes rejecting unsupported flags.  Callers that interact with
+        # ``create_db`` should disable this behaviour because newer Vertica
+        # revisions treat a bare path as an unknown option during bootstrap.
         variants.append(quoted)
 
     # Preserve ordering while removing duplicates.
@@ -4439,7 +4437,7 @@ def _attempt_vertica_database_creation(container: str, database: str) -> bool:
             fragments: tuple[str, ...]
             if license_path:
                 fragments = _license_option_variants(
-                    license_path, include_short_flag=True
+                    license_path, include_short_flag=True, allow_plain_path=False
                 )
                 candidate_commands = (
                     f'{path_command} {fragment}'.strip()
