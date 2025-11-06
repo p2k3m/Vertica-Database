@@ -1370,6 +1370,48 @@ def test_attempt_creation_retries_after_invalid_license_status(monkeypatch):
     )
 
 
+def test_attempt_creation_tries_additional_license_variants(monkeypatch):
+    monkeypatch.setattr(smoke, '_fetch_container_env', lambda container: {})
+    monkeypatch.setattr(
+        smoke,
+        '_discover_container_license_files',
+        lambda container: ['/opt/vertica/config/license.key'],
+    )
+    monkeypatch.setattr(
+        smoke,
+        '_ensure_vertica_license_installed',
+        lambda container: smoke.LicenseStatus(True, False),
+    )
+
+    def fake_option_variants(path: str, *, include_short_flag: bool = False):
+        quoted = shlex.quote(path)
+        return (f'-l {quoted}', f'--license {quoted}')
+
+    monkeypatch.setattr(smoke, '_license_option_variants', fake_option_variants)
+
+    commands: list[str] = []
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        script = command[-1]
+        commands.append(script)
+        if '--license ' in script.splitlines()[-1]:
+            return SimpleNamespace(returncode=0, stdout='Created', stderr='')
+        return SimpleNamespace(
+            returncode=1,
+            stdout='',
+            stderr='Error: Invalid license status\n',
+        )
+
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is True
+    assert len(commands) >= 2
+    first = commands[0].splitlines()[-1]
+    second = commands[1].splitlines()[-1]
+    assert '-l ' in first
+    assert '--license ' in second
+
+
 def test_attempt_creation_rediscovers_license_after_seeding(monkeypatch):
     def fake_fetch_env(container: str) -> dict[str, str]:
         assert container == 'vertica_ce'
@@ -1415,29 +1457,45 @@ def test_attempt_creation_rediscovers_license_after_seeding(monkeypatch):
         deploy_calls.append((container, source_path, extra_destinations))
         return True
 
-    responses = [
-        SimpleNamespace(
-            returncode=1,
-            stdout='',
-            stderr=(
-                'Error: License key '
-                '/opt/vertica/config/d5415f948449e9d4c421b568f2411140.dat '
-                'not installed.\nInvalid license status\n'
-            ),
-        ),
-        SimpleNamespace(returncode=1, stdout='', stderr='Error: license not installed\n'),
-        SimpleNamespace(returncode=1, stdout='', stderr='Error: still missing license\n'),
-        SimpleNamespace(returncode=0, stdout='Created', stderr=''),
-    ]
-
     commands: list[str] = []
+    failure_counts = {'hash': 0, 'data': 0, 'none': 0}
+    data_success_triggered = {'value': False}
 
     def fake_exec(container, command, message, allow_root_fallback=True):
         assert container == 'vertica_ce'
         assert allow_root_fallback is False
         script = command[-1]
         commands.append(script)
-        return responses.pop(0)
+        last_line = script.splitlines()[-1]
+        if 'd5415f948449e9d4c421b568f2411140.dat' in last_line:
+            failure_counts['hash'] += 1
+            return SimpleNamespace(
+                returncode=1,
+                stdout='',
+                stderr=(
+                    'Error: License key '
+                    '/opt/vertica/config/d5415f948449e9d4c421b568f2411140.dat '
+                    'not installed.\nInvalid license status\n'
+                ),
+            )
+        if '/data/vertica/config/license.key' in last_line:
+            failure_counts['data'] += 1
+            if not data_success_triggered['value']:
+                data_success_triggered['value'] = True
+                return SimpleNamespace(
+                    returncode=1,
+                    stdout='',
+                    stderr=(
+                        'Error: a database license has not been installed.\n'
+                    ),
+                )
+            return SimpleNamespace(returncode=0, stdout='Created', stderr='')
+        failure_counts['none'] += 1
+        return SimpleNamespace(
+            returncode=1,
+            stdout='',
+            stderr='Error: license not installed\n',
+        )
 
     monkeypatch.setattr(smoke, '_fetch_container_env', fake_fetch_env)
     monkeypatch.setattr(smoke, '_discover_container_license_files', fake_discover)

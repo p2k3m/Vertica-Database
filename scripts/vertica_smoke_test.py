@@ -282,6 +282,7 @@ _ADMINTOOLS_LICENSE_REQUIRED_PATTERNS: tuple[str, ...] = (
     'license has not been installed',
     'must supply a valid license',
     'no license',
+    'invalid license status',
 )
 _ADMINTOOLS_HELP_LICENSE_PATTERN = re.compile(
     r'(?<!\S)([A-Za-z0-9_-]*license[A-Za-z0-9_-]*)',
