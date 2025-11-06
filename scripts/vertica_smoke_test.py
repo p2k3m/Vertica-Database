@@ -317,22 +317,22 @@ def _license_option_variants(
 
     quoted = shlex.quote(license_path)
 
-    # Prefer the short-form options that older Vertica releases expose.  These
-    # continue to work on newer versions while avoiding the ``ATMain.py: error:
-    # no such option`` failures observed when probing with long-form flags on
-    # legacy builds.  Trying the compatible spellings first greatly reduces the
-    # likelihood of triggering the admintools IndexError that accompanies those
-    # option parsing failures.  The ``-l``/``-L`` spellings are recognised by
-    # newer releases, so include them even when ``include_short_flag`` is false
-    # (albeit after the legacy ``-f``/``-k`` variants) to ensure the installer
-    # eventually attempts the supported flag on modern images.
+    # Prefer option spellings that recent Vertica releases recognise while
+    # keeping the list deliberately small.  The license command in newer images
+    # crashes with an ``IndexError`` after reporting ``no such option`` for
+    # unrecognised flags.  Earlier revisions exposed additional short-hand
+    # variants (``-f``/``-k`` and friends), but attempting those first resulted
+    # in more than two dozen failures before the automation could fall forward
+    # to a supported syntax.  That easily exceeded the retry budget inside
+    # ``_run_admintools_license_command`` and prevented the smoke test from
+    # ever reaching the plain path fallback.  Restrict the option set to the
+    # known ``-l``/``--license*`` forms and avoid the ``--flag=VALUE`` style
+    # altogether so admintools receives clean positional arguments.
     variants: list[str] = []
 
     short_flag_variants = (
         f'-l {quoted}',
-        f'-l={quoted}',
         f'-L {quoted}',
-        f'-L={quoted}',
     )
 
     if include_short_flag:
@@ -340,62 +340,24 @@ def _license_option_variants(
 
     variants.extend(
         [
-            f'-f {quoted}',
-            f'-f={quoted}',
-            f'-F {quoted}',
-            f'-F={quoted}',
-            f'-k {quoted}',
-            f'-k={quoted}',
-            f'-K {quoted}',
-            f'-K={quoted}',
+            f'--license {quoted}',
+            f'--license-path {quoted}',
+            f'--license_path {quoted}',
+            f'--license-file {quoted}',
+            f'--license_file {quoted}',
+            f'--license-key {quoted}',
+            f'--license_key {quoted}',
+            f'--license-key-file {quoted}',
+            f'--license_key_file {quoted}',
         ]
     )
 
     if not include_short_flag:
         variants.extend(short_flag_variants)
 
-    # Include the long-form spellings used by newer Vertica releases before the
-    # plain path variant.  Recent container images reject the historic short
-    # flags with a usage error that also triggers the admintools ``IndexError``
-    # crash.  When that happens the invocation previously bailed out before
-    # reaching the long-form options, leaving the smoke test stuck without a
-    # valid license.  Trying the long-form flags earlier allows the automation
-    # to fall forward to a supported spelling before ``admintools`` aborts the
-    # probe, while still keeping the bare path fallback available for legacy
-    # environments that require it.
-    variants.extend(
-        [
-            f'--license {quoted}',
-            f'--license={quoted}',
-            f'--license-path {quoted}',
-            f'--license-path={quoted}',
-            f'--license_path {quoted}',
-            f'--license_path={quoted}',
-            f'--license-file {quoted}',
-            f'--license-file={quoted}',
-            f'--license_file {quoted}',
-            f'--license_file={quoted}',
-            f'--license-key {quoted}',
-            f'--license-key={quoted}',
-            f'--license_key {quoted}',
-            f'--license_key={quoted}',
-            f'--license-key-file {quoted}',
-            f'--license-key-file={quoted}',
-            f'--license_key_file {quoted}',
-            f'--license_key_file={quoted}',
-            f'--key {quoted}',
-            f'--key={quoted}',
-            f'--key-file {quoted}',
-            f'--key-file={quoted}',
-            f'--keyfile {quoted}',
-            f'--keyfile={quoted}',
-            f'--path {quoted}',
-            f'--path={quoted}',
-            f'--file {quoted}',
-            f'--file={quoted}',
-        ]
-    )
-
+    # Try the plain path variant towards the end so older releases that expect a
+    # positional argument can still succeed once admintools finishes rejecting
+    # unsupported flags.
     variants.append(quoted)
 
     # Preserve ordering while removing duplicates.
