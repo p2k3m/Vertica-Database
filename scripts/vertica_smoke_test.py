@@ -4262,7 +4262,12 @@ def _ensure_vertica_license_installed(container: str) -> LicenseStatus:
         return LicenseStatus(True, False)
 
     if status.returncode == 0:
-        if 'no license' not in combined and 'not been installed' not in combined:
+        if (
+            'no license' not in combined
+            and 'not been installed' not in combined
+            and 'not installed' not in combined
+            and 'invalid license status' not in combined
+        ):
             return LicenseStatus(True, True)
         log(
             'Vertica license status indicates no license is installed; attempting '
