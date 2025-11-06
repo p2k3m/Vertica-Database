@@ -1310,6 +1310,80 @@ def test_attempt_creation_retries_when_license_required(monkeypatch):
     assert _command_contains_license_option(second, '/opt/vertica/config/license.key')
 
 
+def test_attempt_creation_skips_invalid_license_paths(monkeypatch):
+    bad_path = '/data/vertica/config/license.bad'
+    good_path = '/opt/vertica/config/license.key'
+    commands: list[str] = []
+    discovery_calls = {'count': 0}
+    deploy_calls: list[tuple[str, str, tuple[str, ...]]] = []
+    post_good_attempt = {'value': False}
+
+    def fake_fetch_env(container: str) -> dict[str, str]:
+        assert container == 'vertica_ce'
+        return {'VERTICA_DB_PASSWORD': 'secret'}
+
+    def fake_discover(container: str) -> list[str]:
+        assert container == 'vertica_ce'
+        discovery_calls['count'] += 1
+        return [bad_path, good_path]
+
+    monkeypatch.setattr(smoke, '_fetch_container_env', fake_fetch_env)
+    monkeypatch.setattr(smoke, '_discover_container_license_files', fake_discover)
+    monkeypatch.setattr(
+        smoke,
+        '_ensure_vertica_license_installed',
+        lambda container: smoke.LicenseStatus(True, True),
+    )
+
+    def fake_deploy(
+        container: str,
+        source_path: str,
+        *,
+        extra_destinations: tuple[str, ...] = (),
+    ) -> bool:
+        assert container == 'vertica_ce'
+        deploy_calls.append((container, source_path, extra_destinations))
+        return False
+
+    def fake_exec(container, command, message, allow_root_fallback=True):
+        assert container == 'vertica_ce'
+        assert allow_root_fallback is False
+        script = command[-1]
+        commands.append(script)
+        if post_good_attempt['value'] and bad_path in script:
+            pytest.fail('invalid license path retried after fallback')
+        if bad_path in script:
+            return SimpleNamespace(
+                returncode=1,
+                stdout='',
+                stderr=(
+                    f'Error: License key {bad_path} not installed.\n'
+                    'Invalid license status\n'
+                ),
+            )
+        if good_path in script and any(
+            token in script for token in ('-l ', '--license')
+        ):
+            post_good_attempt['value'] = True
+            return SimpleNamespace(returncode=0, stdout='Created', stderr='')
+        return SimpleNamespace(
+            returncode=1,
+            stdout='',
+            stderr=(
+                'Error: a database license has not been installed.\n'
+                'You must supply a valid license using the -l (--license) option.\n'
+            ),
+        )
+
+    monkeypatch.setattr(smoke, '_deploy_vertica_license_fallback', fake_deploy)
+    monkeypatch.setattr(smoke, '_docker_exec_prefer_container_admin', fake_exec)
+
+    assert smoke._attempt_vertica_database_creation('vertica_ce', 'VMart') is True
+    assert any(good_path in command for command in commands)
+    assert all(call[1] != bad_path for call in deploy_calls)
+    assert discovery_calls['count'] >= 1
+
+
 def test_attempt_creation_retries_when_license_flag_unrecognized_plural(monkeypatch):
     commands: list[str] = []
 
