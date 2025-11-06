@@ -611,14 +611,14 @@ def test_admintools_license_target_commands_include_environment_exports():
 def test_license_option_variants_include_supported_flags():
     variants = smoke._license_option_variants('/data/vertica/config/license.key')
     assert '--license /data/vertica/config/license.key' in variants
-    assert '/data/vertica/config/license.key' in variants
     assert '-l /data/vertica/config/license.key' in variants
+    assert '/data/vertica/config/license.key' in variants
     create_variants = smoke._license_option_variants(
         '/data/vertica/config/license.key', include_short_flag=True
     )
-    assert '/data/vertica/config/license.key' in create_variants
     assert '-l /data/vertica/config/license.key' in create_variants
     assert '--license /data/vertica/config/license.key' in create_variants
+    assert '/data/vertica/config/license.key' not in create_variants
 
     # Ensure legacy variants that trigger admintools crashes are excluded.
     assert '-f /data/vertica/config/license.key' not in variants
@@ -641,7 +641,7 @@ def test_license_option_variants_only_include_plain_path_for_admintools():
     create_variants = smoke._license_option_variants(
         '/data/vertica/config/license.key', include_short_flag=True
     )
-    assert any(not variant.startswith('-') for variant in create_variants)
+    assert all(variant.startswith('-') for variant in create_variants)
 
 
 def test_install_vertica_license_uses_fallback(monkeypatch):
