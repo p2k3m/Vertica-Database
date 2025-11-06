@@ -777,6 +777,56 @@ def test_install_vertica_license_handles_no_such_option(monkeypatch):
     ]
 
 
+def test_install_vertica_license_handles_invalid_status(monkeypatch):
+    paths = ['/opt/vertica/config/license.dat']
+
+    monkeypatch.setattr(
+        smoke,
+        '_discover_container_license_files',
+        lambda _container: paths,
+    )
+
+    message = (
+        'License key /data/vertica/config/license.dat not installed. Details follow.\n'
+        'Invalid license status\n'
+    )
+
+    monkeypatch.setattr(
+        smoke,
+        '_docker_exec_prefer_container_admin',
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout=message,
+            stderr='',
+        ),
+    )
+
+    called: list[tuple[str, str, tuple[str, ...]]] = []
+
+    def fake_deploy(
+        container: str,
+        source: str,
+        *,
+        extra_destinations: tuple[str, ...] = (),
+    ) -> bool:
+        called.append((container, source, extra_destinations))
+        return True
+
+    monkeypatch.setattr(smoke, '_deploy_vertica_license_fallback', fake_deploy)
+
+    assert smoke._install_vertica_license('vertica_ce') is True
+    assert called == [
+        (
+            'vertica_ce',
+            paths[0],
+            (
+                paths[0],
+                '/data/vertica/config/license.dat',
+            ),
+        )
+    ]
+
+
 def test_install_vertica_license_handles_index_error(monkeypatch):
     monkeypatch.setattr(
         smoke,
