@@ -1698,9 +1698,17 @@ def test_attempt_creation_tries_additional_license_variants(monkeypatch):
         lambda container: smoke.LicenseStatus(True, False),
     )
 
-    def fake_option_variants(path: str, *, include_short_flag: bool = False):
+    def fake_option_variants(
+        path: str,
+        *,
+        include_short_flag: bool = False,
+        allow_plain_path: bool = True,
+    ):
         quoted = shlex.quote(path)
-        return (f'-l {quoted}', f'--license {quoted}')
+        variants = [f'-l {quoted}', f'--license {quoted}']
+        if allow_plain_path:
+            variants.append(quoted)
+        return tuple(variants)
 
     monkeypatch.setattr(smoke, '_license_option_variants', fake_option_variants)
 
